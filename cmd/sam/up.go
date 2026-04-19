@@ -11,7 +11,9 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"sam/pkg/economy"
 	"sam/pkg/identity"
+	"sam/pkg/protocol"
 )
 
 func newUpCmd(cfg *runConfig) *cobra.Command {
@@ -23,6 +25,7 @@ func newUpCmd(cfg *runConfig) *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&cfg.issuerName, "issuer", "sam.local", "identity issuer name for voucher bootstrap")
+	cmd.Flags().StringVar(&cfg.tunnelHTTPEndpoint, "tunnel-http-endpoint", "", "optional local HTTP endpoint exposed via /sam/tunnel/http/1.0 (for example http://127.0.0.1:11434)")
 	return cmd
 }
 
@@ -51,6 +54,20 @@ func runUp(parent context.Context, cfg *runConfig) error {
 	}
 	if _, err = identity.NewVerifier(identity.WithTrustedIssuer(iss.Issuer(), iss.PublicKey())); err != nil {
 		return fmt.Errorf("initializing verifier: %w", err)
+	}
+
+	var tunnel *protocol.HTTPTunnelService
+	if cfg.tunnelHTTPEndpoint != "" {
+		tunnel, err = protocol.NewHTTPTunnelService(
+			node.Host(),
+			cfg.tunnelHTTPEndpoint,
+			protocol.WithHTTPTunnelSkillGate(economy.NewBiscuitSkillGate(nil)),
+		)
+		if err != nil {
+			return fmt.Errorf("initializing HTTP tunnel listener: %w", err)
+		}
+		defer tunnel.Close()
+		log.Info("HTTP tunnel listener enabled", "protocol", protocol.HTTPTunnelProtocolID, "endpoint", cfg.tunnelHTTPEndpoint)
 	}
 
 	addrs := make([]string, 0, len(node.Addrs()))

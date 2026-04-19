@@ -23,7 +23,8 @@ type runConfig struct {
 	debug          bool
 
 	// sam up
-	issuerName string
+	issuerName         string
+	tunnelHTTPEndpoint string
 
 	// sam publish (shared by card and mcp subcommands)
 	capabilities   []string
@@ -50,6 +51,12 @@ type runConfig struct {
 	callAsset   string
 	callNonce   string
 	callTimeout time.Duration
+
+	// sam proxy
+	proxyPort      int
+	proxyTargetHdr string
+	proxyBiscuit   string
+	proxyTimeout   time.Duration
 
 	// federation storage context
 	federation string
@@ -85,6 +92,7 @@ func newRootCmd(cfg *runConfig) *cobra.Command {
 	cmd.AddCommand(newPublishCmd(cfg))
 	cmd.AddCommand(newMeshCmd(cfg))
 	cmd.AddCommand(newCallCmd(cfg))
+	cmd.AddCommand(newProxyCmd(cfg))
 	cmd.AddCommand(newIdentityCmd(cfg))
 	cmd.AddCommand(newInspectCmd(cfg))
 	return cmd

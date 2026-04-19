@@ -94,3 +94,33 @@ teardown() {
   [[ "$status" -eq 0 ]]
   [[ "$output" == *"test-peer"* ]] || [[ "$output" == *"Peer ID"* ]]
 }
+
+@test "sam proxy --help returns success" {
+  run "$SAM_BINARY" proxy --help
+  [[ "$status" -eq 0 ]]
+  [[ "$output" == *"X-SAM-Target"* ]] || [[ "$output" == *"--port"* ]]
+}
+
+@test "sam proxy rejects requests without local identity login" {
+  proxy_port=18080
+  proxy_log="$TEST_TMPDIR/proxy.log"
+
+  "$SAM_BINARY" proxy --port "$proxy_port" --listen /ip4/127.0.0.1/udp/4212/quic-v1 --run-for 10s >"$proxy_log" 2>&1 &
+  proxy_pid=$!
+
+  status_code="000"
+  for _ in {1..40}; do
+    status_code="$(curl -s -o "$TEST_TMPDIR/proxy_body.txt" -w "%{http_code}" -H "X-SAM-Target: 12D3KooWJ5x6k6U4k6M8QfR5fE3iZ7W2V2QX2c9Lr4R8D8vH" "http://127.0.0.1:${proxy_port}/health" || true)"
+    if [[ "$status_code" != "000" ]]; then
+      break
+    fi
+    sleep 0.1
+  done
+
+  kill "$proxy_pid" >/dev/null 2>&1 || true
+  wait "$proxy_pid" >/dev/null 2>&1 || true
+
+  [[ "$status_code" == "401" ]]
+  run cat "$TEST_TMPDIR/proxy_body.txt"
+  [[ "$output" == *"unauthorized"* ]]
+}
