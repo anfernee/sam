@@ -104,6 +104,26 @@ func printAgentsTable(w io.Writer, rows []agentRow) error {
 	return tw.Flush()
 }
 
+func printAgentsTableHeader(w io.Writer) error {
+	tw := tabwriter.NewWriter(w, 0, 0, 3, ' ', 0)
+	_, _ = fmt.Fprintln(tw, "PEER ID\tIDENTITY\tCAPABILITY\tLATENCY\tISSUED AT")
+	return tw.Flush()
+}
+
+func printAgentRows(w io.Writer, rows []agentRow) error {
+	tw := tabwriter.NewWriter(w, 0, 0, 3, ' ', 0)
+	for _, r := range rows {
+		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n",
+			truncate(r.PeerID, 20),
+			r.Identity,
+			r.Capability,
+			r.Latency,
+			r.IssuedAt.Format(time.RFC3339),
+		)
+	}
+	return tw.Flush()
+}
+
 func truncate(s string, n int) string {
 	if len(s) <= n {
 		return s

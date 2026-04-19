@@ -43,6 +43,7 @@ type runConfig struct {
 	capability      string
 	discoverTimeout time.Duration
 	dhtCardMaxAge   time.Duration
+	meshWatch       bool
 
 	// sam call
 	callMessage string

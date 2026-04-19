@@ -66,6 +66,9 @@ func runPublishMCP(parent context.Context, cfg *runConfig) error {
 	if err := attachNodeVouch(card, node.PeerID().String(), priv); err != nil {
 		return err
 	}
+	if err := registerLocalAgentCard(node, card); err != nil {
+		return err
+	}
 
 	connector := &httpMCPConnector{
 		client: &http.Client{Timeout: 30 * time.Second},

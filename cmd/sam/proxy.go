@@ -8,8 +8,6 @@ import (
 	"log/slog"
 	"math/big"
 	"net/http"
-	"os"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -19,16 +17,9 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/multiformats/go-multihash"
 	"github.com/spf13/cobra"
-	"go.etcd.io/bbolt"
 
-	internaldb "sam/internal/db"
 	samnet "sam/pkg/net"
 	"sam/pkg/protocol"
-)
-
-const (
-	proxyCacheRecordVersion = 1
-	proxyCacheCardPrefix    = "agent-card/"
 )
 
 func newProxyCmd(cfg *runConfig) *cobra.Command {
@@ -75,9 +66,25 @@ func runProxy(parent context.Context, cfg *runConfig) error {
 	}
 	defer func() { _ = node.Stop(context.Background()) }()
 
+	discoverer, err := newAgentDiscoverer(node, cfg.federation, 15*time.Minute)
+	if err != nil {
+		return fmt.Errorf("creating informer discoverer: %w", err)
+	}
+	informer, err := samnet.NewLocalInformer(node, cfg.federation, samnet.WithInformerDiscoverer(discoverer))
+	if err != nil {
+		return fmt.Errorf("creating local informer: %w", err)
+	}
+	informer.Start(parent)
+
+	watchManager, err := newInventoryWatchManager(node, cfg.federation)
+	if err != nil {
+		return fmt.Errorf("creating inventory watch manager: %w", err)
+	}
+	defer watchManager.Close()
+
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/.sam/") {
-			handleSAMReserved(w, r, node, cfg)
+			handleSAMReservedWithWatcher(w, r, node, cfg, watchManager)
 			return
 		}
 
@@ -188,10 +195,25 @@ func runProxy(parent context.Context, cfg *runConfig) error {
 }
 
 func handleSAMReserved(w http.ResponseWriter, r *http.Request, node samnet.Node, cfg *runConfig) {
+	handleSAMReservedWithWatcher(w, r, node, cfg, nil)
+}
+
+func handleSAMReservedWithWatcher(w http.ResponseWriter, r *http.Request, node samnet.Node, cfg *runConfig, watchManager *inventoryWatchManager) {
 	ctx, cancel := context.WithTimeout(r.Context(), cfg.proxyTimeout)
 	defer cancel()
 
 	switch r.URL.Path {
+	case "/.sam/watch/inventory":
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if watchManager == nil {
+			http.Error(w, "watch manager unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		watchManager.ServeInventoryWatch(w, r)
+		return
 	case "/.sam/inventory":
 		if r.Method != http.MethodGet {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -236,7 +258,7 @@ func handleSAMReserved(w http.ResponseWriter, r *http.Request, node samnet.Node,
 }
 
 func aggregateInventory(ctx context.Context, node samnet.Node, federation string) ([]*protocol.AgentCard, error) {
-	cached, err := loadCachedCards(federation)
+	cached, err := decodeCachedAgentCards(federation)
 	if err != nil {
 		return nil, err
 	}
@@ -263,7 +285,7 @@ func aggregateInventory(ctx context.Context, node samnet.Node, federation string
 				continue
 			}
 			byPeer[card.PeerID] = card
-			_ = cacheCard(federation, card)
+			_ = upsertAgentCardRecord(federation, card)
 		}
 	}
 
@@ -278,7 +300,7 @@ func aggregateInventory(ctx context.Context, node samnet.Node, federation string
 func searchInventoryBySkill(ctx context.Context, node samnet.Node, federation, skill string) ([]*protocol.AgentCard, error) {
 	byPeer := map[string]*protocol.AgentCard{}
 
-	cached, _ := loadCachedCards(federation)
+	cached, _ := decodeCachedAgentCards(federation)
 	for _, card := range cached {
 		if cardHasCapability(card, skill) {
 			byPeer[card.PeerID] = card
@@ -296,7 +318,7 @@ func searchInventoryBySkill(ctx context.Context, node samnet.Node, federation, s
 				continue
 			}
 			byPeer[card.PeerID] = card
-			_ = cacheCard(federation, card)
+			_ = upsertAgentCardRecord(federation, card)
 		}
 	}
 
@@ -408,100 +430,6 @@ func cardHasCapability(card *protocol.AgentCard, capability string) bool {
 		}
 	}
 	return false
-}
-
-func cacheCard(federation string, card *protocol.AgentCard) error {
-	if card == nil || strings.TrimSpace(card.PeerID) == "" {
-		return nil
-	}
-	path, err := federationDBPath(federation)
-	if err != nil {
-		return err
-	}
-	db, err := bbolt.Open(path, 0o600, &bbolt.Options{Timeout: 2 * time.Second})
-	if err != nil {
-		return err
-	}
-	defer func() { _ = db.Close() }()
-
-	codec := internaldb.JSONCodec{}
-	payload, err := codec.Marshal(proxyCacheRecordVersion, card)
-	if err != nil {
-		return err
-	}
-	key := proxyCacheCardPrefix + card.PeerID
-	return db.Update(func(tx *bbolt.Tx) error {
-		bucket := tx.Bucket([]byte(internaldb.BucketCache))
-		if bucket == nil {
-			return fmt.Errorf("missing cache bucket")
-		}
-		return bucket.Put([]byte(key), payload)
-	})
-}
-
-func loadCachedCards(federation string) ([]*protocol.AgentCard, error) {
-	path, err := federationDBPath(federation)
-	if err != nil {
-		return nil, err
-	}
-	if _, err := os.Stat(path); err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	db, err := bbolt.Open(path, 0o600, &bbolt.Options{Timeout: 2 * time.Second, ReadOnly: true})
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = db.Close() }()
-
-	codec := internaldb.JSONCodec{}
-	seen := map[string]struct{}{}
-	out := make([]*protocol.AgentCard, 0)
-	err = db.View(func(tx *bbolt.Tx) error {
-		bucket := tx.Bucket([]byte(internaldb.BucketCache))
-		if bucket == nil {
-			return nil
-		}
-		return bucket.ForEach(func(key, value []byte) error {
-			if !strings.HasPrefix(string(key), proxyCacheCardPrefix) {
-				return nil
-			}
-			var card protocol.AgentCard
-			if err := codec.Unmarshal(value, proxyCacheRecordVersion, &card, nil); err != nil {
-				return nil
-			}
-			if err := protocol.VerifyAgentCard(&card); err != nil {
-				return nil
-			}
-			if _, ok := seen[card.PeerID]; ok {
-				return nil
-			}
-			seen[card.PeerID] = struct{}{}
-			out = append(out, &card)
-			return nil
-		})
-	})
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func federationDBPath(federation string) (string, error) {
-	baseDir, err := internaldb.FederationsDir()
-	if err != nil {
-		return "", err
-	}
-	name := strings.TrimSpace(federation)
-	if name == "" {
-		name = "default"
-	}
-	if err := os.MkdirAll(baseDir, 0o700); err != nil {
-		return "", err
-	}
-	return filepath.Join(baseDir, name+".db"), nil
 }
 
 type meshToolEntry struct {

@@ -111,6 +111,9 @@ func runPublish(parent context.Context, cfg *runConfig) error {
 	if err := attachNodeVouch(card, node.PeerID().String(), priv); err != nil {
 		return err
 	}
+	if err := registerLocalAgentCard(node, card); err != nil {
+		return err
+	}
 
 	// For dry-run=server mode, skip DHT but still build network
 	if cfg.dryRun == "server" {
@@ -176,6 +179,17 @@ func nodeEd25519PrivateKey(priv any) (ed25519.PrivateKey, error) {
 		return nil, fmt.Errorf("unexpected private key size %d", len(raw))
 	}
 	return ed25519.PrivateKey(raw), nil
+}
+
+func registerLocalAgentCard(node samnet.Node, card *protocol.AgentCard) error {
+	svc, err := protocol.NewDiscoveryService(node)
+	if err != nil {
+		return fmt.Errorf("creating local discovery service: %w", err)
+	}
+	if err := svc.RegisterLocalCard(card); err != nil {
+		return fmt.Errorf("registering local agent card stream: %w", err)
+	}
+	return nil
 }
 
 func publishLoop(parent context.Context, pub *protocol.Publisher, card *protocol.AgentCard, every time.Duration) error {
