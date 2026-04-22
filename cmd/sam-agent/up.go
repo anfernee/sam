@@ -42,8 +42,13 @@ func newUpCmd(cfg *runConfig) *cobra.Command {
 
 func runUp(parent context.Context, cfg *runConfig) error {
 	log := slog.Default()
-	if cfg.hub != "" {
-		log.Info("hub configured", "url", cfg.hub)
+
+	// Require a hub-issued passport biscuit before joining the mesh.
+	// Agents must authenticate via the hub's OIDC flow first:
+	//   sam-agent identity login --hub <hub-url>
+	creds, err := loadRequiredPassport(cfg)
+	if err != nil {
+		return err
 	}
 
 	node, err := buildNode(cfg)
@@ -54,9 +59,13 @@ func runUp(parent context.Context, cfg *runConfig) error {
 		return fmt.Errorf("starting node: %w", err)
 	}
 	defer func() { _ = node.Stop(context.Background()) }()
-	if err := identity.EnsurePassportAuth(node.Host(), defaultFederationID); err != nil {
-		return fmt.Errorf("installing passport auth: %w", err)
+
+	// Set the local passport so this node can prove its hub-issued identity
+	// to every peer it connects to. No biscuit = no mesh participation.
+	if err := identity.SetLocalPassport(node.Host(), defaultFederationID, creds.PassportBiscuit); err != nil {
+		return fmt.Errorf("installing passport: %w", err)
 	}
+	log.Info("hub configured", "url", cfg.hub, "peer_id", creds.PeerID)
 
 	var tunnel *protocol.HTTPTunnelService
 	if cfg.tunnelHTTPEndpoint != "" {
@@ -93,4 +102,26 @@ func runUp(parent context.Context, cfg *runConfig) error {
 	)
 
 	return waitForShutdown(parent, cfg.runFor)
+}
+
+// loadRequiredPassport loads stored credentials and returns an error with
+// actionable guidance if no hub-issued passport biscuit is found.
+// Every agent must authenticate via the hub OIDC flow before joining the mesh.
+func loadRequiredPassport(cfg *runConfig) (*identity.StoredCredentials, error) {
+	store, err := identity.DefaultCredentialStore()
+	if err != nil {
+		return nil, fmt.Errorf("opening credential store: %w", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	creds, err := store.Load()
+	if err != nil {
+		return nil, fmt.Errorf("loading credentials: %w", err)
+	}
+	hub := resolveHubURL(cfg)
+	if creds == nil || creds.PassportBiscuit == "" {
+		return nil, fmt.Errorf(
+			"no hub-issued passport found — authenticate first: sam-agent identity login --hub %s", hub)
+	}
+	return creds, nil
 }
