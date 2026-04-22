@@ -17,6 +17,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -228,7 +229,7 @@ func extractBearerToken(header string) (string, error) {
 	}
 	parts := strings.SplitN(header, " ", 2)
 	if len(parts) != 2 || !strings.EqualFold(strings.TrimSpace(parts[0]), "Bearer") {
-		return "", fmt.Errorf("Authorization must use Bearer scheme")
+		return "", errors.New("authorization must use Bearer scheme")
 	}
 	token := strings.TrimSpace(parts[1])
 	if token == "" {

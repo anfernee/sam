@@ -17,6 +17,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -178,13 +179,13 @@ func loadLocalIdentityAuth() (string, error) {
 		return "", fmt.Errorf("loading credentials: %w", err)
 	}
 	if creds == nil {
-		return "", fmt.Errorf(loginHint)
+		return "", errors.New(loginHint)
 	}
 	pass := strings.TrimSpace(creds.PassportBiscuit)
 	if pass != "" {
 		return pass, nil
 	}
-	return "", fmt.Errorf(loginHint)
+	return "", errors.New(loginHint)
 }
 
 func buildCallRequest(message string) (json.RawMessage, error) {

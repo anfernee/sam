@@ -18,6 +18,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -212,7 +213,7 @@ func extractBearerFromValues(values []string) (string, error) {
 	if len(values) == 0 {
 		return "", fmt.Errorf("missing Authorization header")
 	}
-	return "", fmt.Errorf("Authorization must use Bearer scheme")
+	return "", errors.New("authorization must use Bearer scheme")
 }
 
 func (s *HTTPTunnelService) forwardLocal(ctx context.Context, treq HTTPTunnelRequest) HTTPTunnelResponse {
