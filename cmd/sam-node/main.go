@@ -103,6 +103,9 @@ func main() {
 
 			// Register the mandatory sovereign auth hook
 			node.Host.SetStreamHandler(AuthProtocol, node.HandleAuthHandshake)
+			if err := node.ListenForMeshEvents(context.Background()); err != nil {
+				log.Fatalf("Failed to listen for mesh events: %v", err)
+			}
 
 			fmt.Printf("SAM Node Online.\nPeerID: %s\nListening on: %v\n", node.Host.ID(), listenAddrs)
 

@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 
 	"github.com/libp2p/go-libp2p"
 	dht "github.com/libp2p/go-libp2p-kad-dht"
+	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
@@ -22,6 +24,7 @@ const AuthProtocol = protocol.ID("/sam/auth/1.0.0")
 type SamNode struct {
 	Host         host.Host
 	DHT          *dht.IpfsDHT
+	PubSub       *pubsub.PubSub
 	Store        *Store
 	TrustedPeers map[peer.ID]bool
 	mu           sync.RWMutex
@@ -62,6 +65,44 @@ func (n *SamNode) SecureStreamHandler(pid protocol.ID, handler network.StreamHan
 
 		handler(s)
 	})
+}
+
+func (n *SamNode) ListenForMeshEvents(ctx context.Context) error {
+	ps, err := pubsub.NewGossipSub(ctx, n.Host)
+	if err != nil {
+		return err
+	}
+	topic, err := ps.Join("sam/mesh/events/v1")
+	if err != nil {
+		return err
+	}
+	n.PubSub = ps
+	sub, err := topic.Subscribe()
+	if err != nil {
+		return err
+	}
+
+	go func() {
+		for {
+			msg, err := sub.Next(ctx)
+			if err != nil {
+				return
+			}
+			var ev struct {
+				PeerID peer.ID `json:"peer_id"`
+				Action string  `json:"action"` // "LEFT", "BANNED"
+			}
+			if err := json.Unmarshal(msg.Data, &ev); err == nil {
+				if ev.Action == "LEFT" || ev.Action == "BANNED" {
+					n.mu.Lock()
+					delete(n.TrustedPeers, ev.PeerID)
+					n.mu.Unlock()
+					fmt.Printf("[Mesh] Evicting peer %s based on Hub gossip\n", ev.PeerID)
+				}
+			}
+		}
+	}()
+	return nil
 }
 
 // HandleAuthHandshake handles incoming Identity Biscuits
