@@ -27,18 +27,10 @@ import (
 	"sam/pkg/protocol/discovery"
 )
 
-const protocolPayloadName = "a2a"
-
 // ToA2ACard converts a generic discovery AgentCard into the official A2A SDK representation.
 func ToA2ACard(card *discovery.AgentCard, interfaceURL string) (*a2asdk.AgentCard, error) {
 	if card == nil {
 		return nil, fmt.Errorf("agent card is nil")
-	}
-	if strings.TrimSpace(card.Version) == "" {
-		return nil, fmt.Errorf("card version is required")
-	}
-	if strings.TrimSpace(card.Name) == "" {
-		return nil, fmt.Errorf("card name is required")
 	}
 	if strings.TrimSpace(card.PeerID) == "" {
 		return nil, fmt.Errorf("card peer ID is required")
@@ -47,10 +39,7 @@ func ToA2ACard(card *discovery.AgentCard, interfaceURL string) (*a2asdk.AgentCar
 		return nil, fmt.Errorf("at least one capability is required")
 	}
 
-	out, _ := synthesizeA2ACard(card)
-	if err := card.DecodeProtocolPayload(protocolPayloadName, &out); err == nil {
-		out = normalizeA2ASDKCard(out)
-	}
+	out := synthesizeA2ACard(card)
 	if strings.TrimSpace(interfaceURL) != "" {
 		out.SupportedInterfaces = []*a2asdk.AgentInterface{
 			a2asdk.NewAgentInterface(strings.TrimSpace(interfaceURL), a2asdk.TransportProtocolJSONRPC),
@@ -84,107 +73,74 @@ func AgentCardFromA2A(peerID string, card *a2asdk.AgentCard, resources []mcpprot
 	}
 
 	out := &discovery.AgentCard{
-		Version:      discovery.AgentCardVersion,
-		Name:         strings.TrimSpace(card.Name),
-		Description:  strings.TrimSpace(card.Description),
 		Capabilities: capabilitiesFromSkills(card.Skills),
-		Interfaces:   interfacesFromA2A(card.SupportedInterfaces),
+		Tools:        append([]discovery.Tool(nil), resources...),
 		PeerID:       peerID,
 		IssuedAt:     time.Now().UTC(),
 		Algorithm:    discovery.AgentCardSignAlgo,
 	}
-	if err := mcpprotocol.SetResources(out, resources); err != nil {
-		return nil, err
-	}
-	if err := out.SetProtocolPayload(protocolPayloadName, normalizeA2ASDKCard(*card)); err != nil {
-		return nil, err
-	}
+	mcpprotocol.SetResources(out, resources)
 	return out, nil
 }
 
-func synthesizeA2ACard(card *discovery.AgentCard) (a2asdk.AgentCard, error) {
-	if card == nil {
-		return a2asdk.AgentCard{}, fmt.Errorf("agent card is nil")
-	}
+func synthesizeA2ACard(card *discovery.AgentCard) a2asdk.AgentCard {
 	out := a2asdk.AgentCard{
 		Capabilities: a2asdk.AgentCapabilities{Streaming: true},
-		Description:  strings.TrimSpace(card.Description),
-		Name:         strings.TrimSpace(card.Name),
+		Description:  "SAM agent " + strings.TrimSpace(card.PeerID),
+		Name:         "sam-agent-" + strings.TrimSpace(card.PeerID),
 		Skills:       skillsFromCapabilities(card.Capabilities),
 		Version:      discovery.AgentCardVersion,
 	}
-	for _, item := range card.Interfaces {
-		if item.Protocol != protocolPayloadName {
-			continue
-		}
-		binding := a2asdk.TransportProtocolJSONRPC
-		if strings.TrimSpace(item.Binding) != "" {
-			binding = a2asdk.TransportProtocol(strings.TrimSpace(item.Binding))
-		}
-		iface := a2asdk.NewAgentInterface(strings.TrimSpace(item.URL), binding)
-		iface.Tenant = strings.TrimSpace(item.Tenant)
-		out.SupportedInterfaces = append(out.SupportedInterfaces, iface)
-	}
-	return normalizeA2ASDKCard(out), nil
+	return normalizeA2ASDKCard(out)
 }
 
-func skillsFromCapabilities(in []discovery.Capability) []a2asdk.AgentSkill {
+func skillsFromCapabilities(in []string) []a2asdk.AgentSkill {
 	out := make([]a2asdk.AgentSkill, 0, len(in))
 	for _, capability := range in {
-		identifier := strings.TrimSpace(capability.ID)
-		if identifier == "" {
-			identifier = strings.TrimSpace(capability.Name)
-		}
+		identifier := strings.TrimSpace(capability)
 		if identifier == "" {
 			continue
 		}
 		out = append(out, a2asdk.AgentSkill{
 			ID:          identifier,
-			Name:        strings.TrimSpace(capability.Name),
-			Description: strings.TrimSpace(capability.Description),
-			Tags:        append([]string(nil), capability.Tags...),
+			Name:        identifier,
+			Description: "SAM capability " + identifier,
+			Tags:        []string{"sam"},
 		})
 	}
 	return normalizeSkills(out)
 }
 
-func capabilitiesFromSkills(in []a2asdk.AgentSkill) []discovery.Capability {
-	out := make([]discovery.Capability, 0, len(in))
+func capabilitiesFromSkills(in []a2asdk.AgentSkill) []string {
+	out := make([]string, 0, len(in))
 	for _, skill := range in {
 		identifier := strings.TrimSpace(skill.ID)
-		name := strings.TrimSpace(skill.Name)
 		if identifier == "" {
-			identifier = name
-		}
-		if name == "" {
-			name = identifier
+			identifier = strings.TrimSpace(skill.Name)
 		}
 		if identifier == "" {
 			continue
 		}
-		out = append(out, discovery.Capability{
-			ID:          identifier,
-			Name:        name,
-			Description: strings.TrimSpace(skill.Description),
-			Tags:        append([]string(nil), skill.Tags...),
-		})
+		out = append(out, identifier)
 	}
-	return out
+	return discoveryNormalizeCapabilities(out)
 }
 
-func interfacesFromA2A(in []*a2asdk.AgentInterface) []discovery.Interface {
-	out := make([]discovery.Interface, 0, len(in))
-	for _, item := range in {
-		if item == nil {
+func discoveryNormalizeCapabilities(capabilities []string) []string {
+	seen := make(map[string]struct{}, len(capabilities))
+	out := make([]string, 0, len(capabilities))
+	for _, capability := range capabilities {
+		capability = strings.ToLower(strings.TrimSpace(capability))
+		if capability == "" {
 			continue
 		}
-		out = append(out, discovery.Interface{
-			Protocol: protocolPayloadName,
-			URL:      strings.TrimSpace(item.URL),
-			Binding:  string(item.ProtocolBinding),
-			Tenant:   strings.TrimSpace(item.Tenant),
-		})
+		if _, ok := seen[capability]; ok {
+			continue
+		}
+		seen[capability] = struct{}{}
+		out = append(out, capability)
 	}
+	sort.Strings(out)
 	return out
 }
 

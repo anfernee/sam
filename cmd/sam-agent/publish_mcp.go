@@ -74,7 +74,7 @@ func runPublishMCP(parent context.Context, cfg *runConfig) error {
 		Kind:     strings.TrimSpace(cfg.resourceKind),
 		Endpoint: fmt.Sprintf("http://127.0.0.1:%d", cfg.mcpPort),
 	}
-	card, err := protocol.NewAgentCard(node.PeerID(), cfg.capabilities, priv, mcpprotocol.WithResources([]mcpprotocol.Resource{resource}))
+	card, err := protocol.NewAgentCard(node.PeerID(), cfg.capabilities, []mcpprotocol.Resource{resource}, priv)
 	if err != nil {
 		return fmt.Errorf("building agent card: %w", err)
 	}

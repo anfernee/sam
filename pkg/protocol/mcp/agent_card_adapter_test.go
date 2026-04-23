@@ -35,8 +35,8 @@ func TestWithResources(t *testing.T) {
 	card, err := discovery.NewAgentCard(
 		pid,
 		[]string{"search"},
+		[]Resource{{Name: "search", Kind: "tool", Endpoint: "mcp://search"}},
 		priv,
-		WithResources([]Resource{{Name: "search", Kind: "tool", Endpoint: "mcp://search"}}),
 	)
 	if err != nil {
 		t.Fatalf("NewAgentCard() error = %v", err)

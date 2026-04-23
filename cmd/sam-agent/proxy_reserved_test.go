@@ -123,7 +123,7 @@ func TestSAMReservedSearchReturnsPublishedWriterCard(t *testing.T) {
 	if priv == nil {
 		t.Fatalf("publisher private key missing")
 	}
-	card, err := protocol.NewAgentCard(nodeA.PeerID(), []string{"writer"}, priv, mcpprotocol.WithResources([]mcpprotocol.Resource{{Name: "writer", Kind: "tool", Endpoint: "mcp://writer"}}))
+	card, err := protocol.NewAgentCard(nodeA.PeerID(), []string{"writer"}, []mcpprotocol.Resource{{Name: "writer", Kind: "tool", Endpoint: "mcp://writer"}}, priv)
 	if err != nil {
 		t.Fatalf("creating writer card: %v", err)
 	}

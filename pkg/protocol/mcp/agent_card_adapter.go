@@ -15,74 +15,24 @@
 package mcp
 
 import (
-	"sort"
-	"strings"
-
 	"sam/pkg/protocol/discovery"
 )
 
-const cardProtocolName = "mcp"
-
 // Resource describes an MCP-compatible tool or data source advertised by an agent.
-type Resource struct {
-	Name        string `json:"name"`
-	Kind        string `json:"kind"`
-	Endpoint    string `json:"endpoint,omitempty"`
-	Description string `json:"description,omitempty"`
-}
+type Resource = discovery.Tool
 
-type cardMetadata struct {
-	Resources []Resource `json:"resources,omitempty"`
-}
-
-// WithResources attaches MCP-specific resource metadata to a generic discovery card.
-func WithResources(resources []Resource) discovery.CardOption {
-	return func(card *discovery.AgentCard) error {
-		return SetResources(card, resources)
-	}
-}
-
-// SetResources stores MCP resources in the card's protocol-specific payload.
-func SetResources(card *discovery.AgentCard, resources []Resource) error {
+// SetResources stores MCP resources directly in the discovery card tool list.
+func SetResources(card *discovery.AgentCard, resources []Resource) {
 	if card == nil {
-		return nil
+		return
 	}
-	normalized := normalizeResources(resources)
-	if len(normalized) == 0 {
-		return nil
-	}
-	return card.SetProtocolPayload(cardProtocolName, cardMetadata{Resources: normalized})
+	card.Tools = append([]discovery.Tool(nil), resources...)
 }
 
-// ResourcesFromCard extracts MCP resources from a generic discovery card.
+// ResourcesFromCard returns the discovery card tool list as MCP resources.
 func ResourcesFromCard(card *discovery.AgentCard) []Resource {
 	if card == nil {
 		return nil
 	}
-	var metadata cardMetadata
-	if err := card.DecodeProtocolPayload(cardProtocolName, &metadata); err != nil {
-		return nil
-	}
-	return normalizeResources(metadata.Resources)
-}
-
-func normalizeResources(resources []Resource) []Resource {
-	out := make([]Resource, 0, len(resources))
-	for _, resource := range resources {
-		resource.Name = strings.TrimSpace(resource.Name)
-		resource.Kind = strings.TrimSpace(resource.Kind)
-		resource.Endpoint = strings.TrimSpace(resource.Endpoint)
-		resource.Description = strings.TrimSpace(resource.Description)
-		if resource.Name == "" {
-			continue
-		}
-		out = append(out, resource)
-	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].Name == out[j].Name {
-			return out[i].Kind < out[j].Kind
-		}
-		return out[i].Name < out[j].Name
-	})
-	return out
+	return append([]Resource(nil), card.Tools...)
 }

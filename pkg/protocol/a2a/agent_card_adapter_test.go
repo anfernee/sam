@@ -38,8 +38,8 @@ func TestToA2ACard(t *testing.T) {
 	card, err := discovery.NewAgentCard(
 		pid,
 		[]string{"inference", "search"},
+		[]mcpprotocol.Resource{{Name: "mcp", Kind: "tool"}},
 		priv,
-		mcpprotocol.WithResources([]mcpprotocol.Resource{{Name: "mcp", Kind: "tool"}}),
 	)
 	if err != nil {
 		t.Fatalf("NewAgentCard() error = %v", err)
@@ -77,13 +77,6 @@ func TestAgentCardFromA2A(t *testing.T) {
 	card, err := AgentCardFromA2A("12D3KooWQK6Jk5hY5YAL3mVyYBVN1w8w5kZdeMNF8f9mJ5JPgX5R", a2aCard, nil)
 	if err != nil {
 		t.Fatalf("AgentCardFromA2A() error = %v", err)
-	}
-	var stored a2asdk.AgentCard
-	if err := card.DecodeProtocolPayload(protocolPayloadName, &stored); err != nil {
-		t.Fatalf("DecodeProtocolPayload() error = %v", err)
-	}
-	if stored.Name != a2aCard.Name {
-		t.Fatalf("stored protocol payload name = %q, want %q", stored.Name, a2aCard.Name)
 	}
 	resources := mcpprotocol.ResourcesFromCard(card)
 	if len(resources) != 0 {

@@ -158,31 +158,15 @@ func runProviderRole() error {
 		return fmt.Errorf("provider passport setup: %w", err)
 	}
 
-	providerAddr := fmt.Sprintf("/ip4/%s/udp/%d/quic-v1/p2p/%s", os.Getenv(helperIPEnv), port, node.PeerID())
-	info := providerInfo{PeerID: node.PeerID().String(), Bootstrap: providerAddr}
-	if err := writeProviderInfo(os.Getenv(helperInfoEnv), info); err != nil {
-		return err
-	}
-
 	priv := node.Host().Peerstore().PrivKey(node.PeerID())
 	card, err := protocol.NewAgentCard(
 		node.PeerID(),
 		[]string{capabilityName},
+		[]mcpprotocol.Resource{{Name: "echo", Kind: "tool", Endpoint: "mcp://echo"}},
 		priv,
-		mcpprotocol.WithResources([]mcpprotocol.Resource{{Name: "echo", Kind: "tool", Endpoint: "mcp://echo"}}),
 	)
 	if err != nil {
 		return fmt.Errorf("provider card creation: %w", err)
-	}
-
-	publisher, err := protocol.NewPublisher(node)
-	if err != nil {
-		return fmt.Errorf("provider publisher: %w", err)
-	}
-	if err := publisher.Publish(ctx, card); err != nil {
-		if err := publishWithRetry(ctx, publisher, card); err != nil {
-			return fmt.Errorf("provider publish: %w", err)
-		}
 	}
 
 	discovery, err := protocol.NewDiscoveryService(node)
@@ -195,6 +179,22 @@ func runProviderRole() error {
 
 	if _, err := mcpprotocol.NewMCPBridge(node.Host(), tokenVerifier{token: validBiscuit}, echoConnector{}); err != nil {
 		return fmt.Errorf("provider bridge setup: %w", err)
+	}
+
+	providerAddr := fmt.Sprintf("/ip4/%s/udp/%d/quic-v1/p2p/%s", os.Getenv(helperIPEnv), port, node.PeerID())
+	info := providerInfo{PeerID: node.PeerID().String(), Bootstrap: providerAddr}
+	if err := writeProviderInfo(os.Getenv(helperInfoEnv), info); err != nil {
+		return err
+	}
+
+	publisher, err := protocol.NewPublisher(node)
+	if err != nil {
+		return fmt.Errorf("provider publisher: %w", err)
+	}
+	if err := publisher.Publish(ctx, card); err != nil {
+		if err := publishWithRetry(ctx, publisher, card); err != nil {
+			return fmt.Errorf("provider publish: %w", err)
+		}
 	}
 
 	// Keep the provider online while the consumer performs discovery and bridge calls.

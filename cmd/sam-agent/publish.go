@@ -121,7 +121,7 @@ func runPublish(parent context.Context, cfg *runConfig) error {
 		Description: strings.TrimSpace(cfg.resourceDesc),
 	}
 
-	card, err := protocol.NewAgentCard(node.PeerID(), cfg.capabilities, priv, mcpprotocol.WithResources([]mcpprotocol.Resource{resource}))
+	card, err := protocol.NewAgentCard(node.PeerID(), cfg.capabilities, []mcpprotocol.Resource{resource}, priv)
 	if err != nil {
 		return fmt.Errorf("building agent card: %w", err)
 	}
@@ -253,7 +253,7 @@ func runPublishDryRunClient(cfg *runConfig) error {
 		Description: strings.TrimSpace(cfg.resourceDesc),
 	}
 
-	card, err := protocol.NewAgentCard(peerID, cfg.capabilities, privKey, mcpprotocol.WithResources([]mcpprotocol.Resource{resource}))
+	card, err := protocol.NewAgentCard(peerID, cfg.capabilities, []mcpprotocol.Resource{resource}, privKey)
 	if err != nil {
 		return fmt.Errorf("building agent card: %w", err)
 	}

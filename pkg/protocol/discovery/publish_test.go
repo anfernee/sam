@@ -62,7 +62,7 @@ func TestPublisherPublishesPeerAndCapabilityNamespaces(t *testing.T) {
 		t.Fatalf("IDFromPrivateKey() error = %v", err)
 	}
 
-	card, err := protocol.NewAgentCard(pid, []string{"inference", "search"}, priv)
+	card, err := protocol.NewAgentCard(pid, []string{"inference", "search"}, nil, priv)
 	if err != nil {
 		t.Fatalf("NewAgentCard() error = %v", err)
 	}
@@ -109,7 +109,7 @@ func TestPublisherRejectsPeerMismatch(t *testing.T) {
 		t.Fatalf("IDFromPrivateKey() error = %v", err)
 	}
 
-	card, err := protocol.NewAgentCard(pidA, []string{"inference"}, privA)
+	card, err := protocol.NewAgentCard(pidA, []string{"inference"}, nil, privA)
 	if err != nil {
 		t.Fatalf("NewAgentCard() error = %v", err)
 	}

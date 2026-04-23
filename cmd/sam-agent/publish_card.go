@@ -66,7 +66,7 @@ func runPublishCard(parent context.Context, cfg *runConfig) error {
 		Endpoint:    strings.TrimSpace(cfg.resourceEP),
 		Description: strings.TrimSpace(cfg.resourceDesc),
 	}
-	card, err := protocol.NewAgentCard(node.PeerID(), cfg.capabilities, priv, mcpprotocol.WithResources([]mcpprotocol.Resource{resource}))
+	card, err := protocol.NewAgentCard(node.PeerID(), cfg.capabilities, []mcpprotocol.Resource{resource}, priv)
 	if err != nil {
 		return fmt.Errorf("building agent card: %w", err)
 	}

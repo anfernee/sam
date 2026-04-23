@@ -240,8 +240,8 @@ func runCallProviderRole() error {
 	card, err := protocol.NewAgentCard(
 		node.PeerID(),
 		[]string{callCapability},
+		[]mcpprotocol.Resource{{Name: "weather", Kind: "tool", Endpoint: "mcp://weather"}},
 		priv,
-		mcpprotocol.WithResources([]mcpprotocol.Resource{{Name: "weather", Kind: "tool", Endpoint: "mcp://weather"}}),
 	)
 	if err != nil {
 		return fmt.Errorf("provider card creation: %w", err)

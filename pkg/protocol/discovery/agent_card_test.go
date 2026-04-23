@@ -38,8 +38,8 @@ func TestAgentCardSignVerify(t *testing.T) {
 	card, err := protocol.NewAgentCard(
 		pid,
 		[]string{"Inference", "search", "search"},
+		[]mcpprotocol.Resource{{Name: "local-mcp", Kind: "tool", Endpoint: "unix:///tmp/mcp.sock"}},
 		priv,
-		mcpprotocol.WithResources([]mcpprotocol.Resource{{Name: "local-mcp", Kind: "tool", Endpoint: "unix:///tmp/mcp.sock"}}),
 	)
 	if err != nil {
 		t.Fatalf("NewAgentCard() error = %v", err)
@@ -68,6 +68,7 @@ func TestAgentCardVerifyRejectsTamper(t *testing.T) {
 	card, err := protocol.NewAgentCard(
 		pid,
 		[]string{"inference"},
+		nil,
 		priv,
 	)
 	if err != nil {
@@ -75,8 +76,7 @@ func TestAgentCardVerifyRejectsTamper(t *testing.T) {
 	}
 
 	card.Capabilities = append(card.Capabilities, card.Capabilities[0])
-	card.Capabilities[1].ID = "search"
-	card.Capabilities[1].Name = "search"
+	card.Capabilities[1] = "search"
 	if err := protocol.VerifyAgentCard(card); err == nil {
 		t.Fatal("VerifyAgentCard() should fail for tampered card")
 	}
@@ -93,12 +93,7 @@ func TestAgentCardVerifyRejectsMissingSignature(t *testing.T) {
 	}
 
 	card := &protocol.AgentCard{
-		Version: protocol.AgentCardVersion,
-		Name:    "sam-agent-" + pid.String(),
-		Capabilities: []protocol.Capability{{
-			ID:   "inference",
-			Name: "inference",
-		}},
+		Capabilities: []string{"inference"},
 		PeerID:    pid.String(),
 		IssuedAt:  time.Now().UTC(),
 		Algorithm: protocol.AgentCardSignAlgo,

@@ -88,7 +88,7 @@ func TestDiscoverReturnsVerifiedCards(t *testing.T) {
 	defer func() { _ = consumerHost.Close() }()
 
 	providerPriv := providerHost.Peerstore().PrivKey(providerHost.ID())
-	card, err := protocol.NewAgentCard(providerHost.ID(), []string{"inference"}, providerPriv)
+	card, err := protocol.NewAgentCard(providerHost.ID(), []string{"inference"}, nil, providerPriv)
 	if err != nil {
 		t.Fatalf("NewAgentCard() error = %v", err)
 	}
@@ -238,7 +238,7 @@ func TestDiscoverPrefersDHTCard(t *testing.T) {
 		t.Fatalf("IDFromPrivateKey() error = %v", err)
 	}
 
-	card, err := protocol.NewAgentCard(providerID, []string{"inference"}, priv)
+	card, err := protocol.NewAgentCard(providerID, []string{"inference"}, nil, priv)
 	if err != nil {
 		t.Fatalf("NewAgentCard() error = %v", err)
 	}
@@ -293,7 +293,7 @@ func TestDiscoverFallsBackToStreamWhenDHTCardInvalid(t *testing.T) {
 	defer func() { _ = consumerHost.Close() }()
 
 	providerPriv := providerHost.Peerstore().PrivKey(providerHost.ID())
-	card, err := protocol.NewAgentCard(providerHost.ID(), []string{"inference"}, providerPriv)
+	card, err := protocol.NewAgentCard(providerHost.ID(), []string{"inference"}, nil, providerPriv)
 	if err != nil {
 		t.Fatalf("NewAgentCard() error = %v", err)
 	}
@@ -351,7 +351,7 @@ func TestDiscoverAllowsStaleDHTCardWhenMaxAgeDisabled(t *testing.T) {
 		t.Fatalf("IDFromPrivateKey() error = %v", err)
 	}
 
-	card, err := protocol.NewAgentCard(providerID, []string{"inference"}, priv)
+	card, err := protocol.NewAgentCard(providerID, []string{"inference"}, nil, priv)
 	if err != nil {
 		t.Fatalf("NewAgentCard() error = %v", err)
 	}
