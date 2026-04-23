@@ -43,7 +43,8 @@ import (
 	"sam/pkg/economy"
 	"sam/pkg/identity"
 	samnet "sam/pkg/net"
-	"sam/pkg/protocol"
+	protocol "sam/pkg/protocol/discovery"
+	mcpprotocol "sam/pkg/protocol/mcp"
 )
 
 const (
@@ -192,7 +193,7 @@ func runProviderRole() error {
 		return fmt.Errorf("provider register local card: %w", err)
 	}
 
-	if _, err := protocol.NewMCPBridge(node.Host(), tokenVerifier{token: validBiscuit}, echoConnector{}); err != nil {
+	if _, err := mcpprotocol.NewMCPBridge(node.Host(), tokenVerifier{token: validBiscuit}, echoConnector{}); err != nil {
 		return fmt.Errorf("provider bridge setup: %w", err)
 	}
 
@@ -284,7 +285,7 @@ func runConsumerRole() error {
 	}
 	_ = peerIDs
 
-	bridge, err := protocol.NewMCPBridge(node.Host(), allowVerifier{}, echoConnector{})
+	bridge, err := mcpprotocol.NewMCPBridge(node.Host(), allowVerifier{}, echoConnector{})
 	if err != nil {
 		return fmt.Errorf("consumer bridge setup: %w", err)
 	}
@@ -372,8 +373,8 @@ func discoverCardsWithRetry(ctx context.Context, svc *protocol.DiscoveryService,
 	}
 }
 
-func expectDeniedBridge(ctx context.Context, bridge *protocol.MCPBridge, providerID peer.ID) error {
-	stream, err := bridge.Open(ctx, providerID, protocol.BridgeOpenRequest{
+func expectDeniedBridge(ctx context.Context, bridge *mcpprotocol.MCPBridge, providerID peer.ID) error {
+	stream, err := bridge.Open(ctx, providerID, mcpprotocol.BridgeOpenRequest{
 		BiscuitToken: "invalid-biscuit",
 		Amount:       1,
 		Asset:        "sam-credit",
@@ -396,8 +397,8 @@ func expectDeniedBridge(ctx context.Context, bridge *protocol.MCPBridge, provide
 	return nil
 }
 
-func expectAllowedBridge(ctx context.Context, bridge *protocol.MCPBridge, providerID peer.ID) error {
-	stream, err := bridge.Open(ctx, providerID, protocol.BridgeOpenRequest{
+func expectAllowedBridge(ctx context.Context, bridge *mcpprotocol.MCPBridge, providerID peer.ID) error {
+	stream, err := bridge.Open(ctx, providerID, mcpprotocol.BridgeOpenRequest{
 		BiscuitToken: validBiscuit,
 		Amount:       2,
 		Asset:        "sam-credit",

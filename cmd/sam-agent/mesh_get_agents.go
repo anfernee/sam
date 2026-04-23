@@ -31,7 +31,7 @@ import (
 	"github.com/spf13/cobra"
 
 	samnet "sam/pkg/net"
-	"sam/pkg/protocol"
+	protocol "sam/pkg/protocol/discovery"
 )
 
 func newMeshGetAgentsCmd(cfg *runConfig) *cobra.Command {

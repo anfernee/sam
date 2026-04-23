@@ -39,7 +39,8 @@ import (
 	"sam/pkg/economy"
 	"sam/pkg/identity"
 	samnet "sam/pkg/net"
-	"sam/pkg/protocol"
+	a2aprotocol "sam/pkg/protocol/a2a"
+	protocol "sam/pkg/protocol/discovery"
 )
 
 const (
@@ -147,7 +148,7 @@ func runCallIntegration(t *testing.T) {
 			if rec.OK {
 				successes++
 			}
-			if !rec.OK && strings.EqualFold(rec.ErrorType, protocol.FailureTypeLiveness) {
+			if !rec.OK && strings.EqualFold(rec.ErrorType, a2aprotocol.FailureTypeLiveness) {
 				livenessFailures++
 			}
 			return nil
@@ -205,7 +206,7 @@ func runCallProviderRole() error {
 
 	// Register the A2A handler BEFORE writing the info file so the consumer
 	// cannot connect and attempt Execute before the protocol is ready.
-	a2aSvc, err := protocol.NewA2AService(node.Host(), delayedResponseConnector{delay: 1500 * time.Millisecond}, protocol.NopObserver{})
+	a2aSvc, err := a2aprotocol.NewA2AService(node.Host(), delayedResponseConnector{delay: 1500 * time.Millisecond}, a2aprotocol.NopObserver{})
 	if err != nil {
 		return fmt.Errorf("provider A2A service setup: %w", err)
 	}
@@ -323,13 +324,13 @@ func runCallConsumerRole() error {
 	// directly after bootstrap connection instead of waiting for DHT convergence.
 	target := peer.AddrInfo{ID: providerID, Addrs: node.Host().Peerstore().Addrs(providerID)}
 
-	observer, err := protocol.NewBoltObserver(os.Getenv(callRepDBEnv))
+	observer, err := a2aprotocol.NewBoltObserver(os.Getenv(callRepDBEnv))
 	if err != nil {
 		return fmt.Errorf("creating bolt observer: %w", err)
 	}
 	defer func() { _ = observer.Close() }()
 
-	req := protocol.ExecuteRequest{
+	req := a2aprotocol.ExecuteRequest{
 		Target:     target,
 		Capability: callCapability,
 		Biscuit:    "integration-biscuit",
@@ -342,7 +343,7 @@ func runCallConsumerRole() error {
 		MCPRequest: []byte(`{"jsonrpc":"2.0","id":"sam-call","method":"message","params":{"message":"weather"}}`),
 	}
 
-	if _, err := protocol.Execute(ctx, node.Host(), req, observer); err != nil {
+	if _, err := a2aprotocol.Execute(ctx, node.Host(), req, observer); err != nil {
 		return fmt.Errorf("expected initial call success, got: %w", err)
 	}
 
@@ -354,7 +355,7 @@ func runCallConsumerRole() error {
 	req.Payment.Nonce = "nonce-failure"
 	failCtx, failCancel := context.WithTimeout(ctx, 5*time.Second)
 	defer failCancel()
-	if _, err := protocol.Execute(failCtx, node.Host(), req, observer); err == nil {
+	if _, err := a2aprotocol.Execute(failCtx, node.Host(), req, observer); err == nil {
 		return fmt.Errorf("expected second call to fail after provider kill")
 	}
 

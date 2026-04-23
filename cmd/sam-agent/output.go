@@ -22,7 +22,7 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"sam/pkg/protocol"
+	protocol "sam/pkg/protocol/discovery"
 )
 
 // outputFormat controls how command results are rendered.

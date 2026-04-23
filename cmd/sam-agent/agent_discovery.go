@@ -22,7 +22,7 @@ import (
 	"time"
 
 	samnet "sam/pkg/net"
-	"sam/pkg/protocol"
+	protocol "sam/pkg/protocol/discovery"
 )
 
 func newAgentDiscoverer(node samnet.Node, federation string, maxDHTCardAge time.Duration) (samnet.AgentDiscoverFunc, error) {

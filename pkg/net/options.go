@@ -64,6 +64,14 @@ type Options struct {
 	RelayFallbackHost string
 	// RendezvousNamespace scopes capability discovery advertisements.
 	RendezvousNamespace string
+	// AttemptAuthWhenMissing triggers a /sam/auth/1.0.0 exchange when a stream
+	// arrives from an unvalidated peer before rejecting it.
+	AttemptAuthWhenMissing bool
+	// ProtocolPolicies defines required claims per protocol ID.
+	// Example: {"/sam/a2a/1.0.0": {"mesh_membership": "finance"}}
+	ProtocolPolicies map[string]map[string]string
+	// StreamMiddlewares are additional wrappers applied to every stream handler.
+	StreamMiddlewares []Middleware
 }
 
 // Option is a functional option for node configuration.
@@ -77,13 +85,15 @@ func DefaultOptions() Options {
 	tcpV4, _ := multiaddr.NewMultiaddr("/ip4/0.0.0.0/tcp/0")
 	tcpV6, _ := multiaddr.NewMultiaddr("/ip6/::/tcp/0")
 	return Options{
-		ListenAddrs:         []multiaddr.Multiaddr{quicV1, quicV1v6, tcpV4, tcpV6},
-		DHTMode:             DHTModeAuto,
-		UserAgent:           "sam/0.1.0",
-		Logger:              slog.Default(),
-		FederationID:        "default",
-		RelayFallbackHost:   DefaultRelayFallbackHost,
-		RendezvousNamespace: DefaultRendezvousNamespace,
+		ListenAddrs:            []multiaddr.Multiaddr{quicV1, quicV1v6, tcpV4, tcpV6},
+		DHTMode:                DHTModeAuto,
+		UserAgent:              "sam/0.1.0",
+		Logger:                 slog.Default(),
+		FederationID:           "default",
+		RelayFallbackHost:      DefaultRelayFallbackHost,
+		RendezvousNamespace:    DefaultRendezvousNamespace,
+		AttemptAuthWhenMissing: true,
+		ProtocolPolicies:       map[string]map[string]string{},
 	}
 }
 
@@ -109,6 +119,9 @@ func (o *Options) validate() error {
 	}
 	if o.RendezvousNamespace == "" {
 		o.RendezvousNamespace = DefaultRendezvousNamespace
+	}
+	if o.ProtocolPolicies == nil {
+		o.ProtocolPolicies = map[string]map[string]string{}
 	}
 	return nil
 }
@@ -171,4 +184,33 @@ func WithRendezvousNamespace(ns string) Option {
 // WithRelayFallbackHost sets the relay host hint used in logs and defaults.
 func WithRelayFallbackHost(host string) Option {
 	return func(o *Options) { o.RelayFallbackHost = host }
+}
+
+// WithAttemptAuthWhenMissing configures whether global middleware attempts
+// /sam/auth/1.0.0 when the peer is not yet validated.
+func WithAttemptAuthWhenMissing(enabled bool) Option {
+	return func(o *Options) { o.AttemptAuthWhenMissing = enabled }
+}
+
+// WithProtocolPolicy requires claim=value for the given protocol ID.
+func WithProtocolPolicy(protocolID, claim, value string) Option {
+	return func(o *Options) {
+		if o.ProtocolPolicies == nil {
+			o.ProtocolPolicies = map[string]map[string]string{}
+		}
+		if _, ok := o.ProtocolPolicies[protocolID]; !ok {
+			o.ProtocolPolicies[protocolID] = map[string]string{}
+		}
+		o.ProtocolPolicies[protocolID][claim] = value
+	}
+}
+
+// WithStreamMiddleware appends a custom global stream middleware wrapper.
+func WithStreamMiddleware(m Middleware) Option {
+	return func(o *Options) {
+		if m == nil {
+			return
+		}
+		o.StreamMiddlewares = append(o.StreamMiddlewares, m)
+	}
 }

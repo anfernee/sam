@@ -33,7 +33,9 @@ import (
 
 	"sam/pkg/identity"
 	samnet "sam/pkg/net"
-	"sam/pkg/protocol"
+	a2aprotocol "sam/pkg/protocol/a2a"
+	protocol "sam/pkg/protocol/discovery"
+	httpprotocol "sam/pkg/protocol/http"
 )
 
 func newProxyCmd(cfg *runConfig) *cobra.Command {
@@ -112,7 +114,7 @@ func runProxy(parent context.Context, cfg *runConfig) error {
 		}
 
 		start := time.Now()
-		observer, err := protocol.NewBoltObserverWithFallback(defaultFederationID)
+		observer, err := a2aprotocol.NewBoltObserverWithFallback(defaultFederationID)
 		if err != nil {
 			http.Error(w, "reputation observer unavailable", http.StatusInternalServerError)
 			return
@@ -146,7 +148,7 @@ func runProxy(parent context.Context, cfg *runConfig) error {
 
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
-			observer.OnFailure(target.ID.String(), protocol.FailureTypeProtocol)
+			observer.OnFailure(target.ID.String(), a2aprotocol.FailureTypeProtocol)
 			http.Error(w, fmt.Sprintf("reading request body: %v", err), http.StatusBadRequest)
 			return
 		}
@@ -154,7 +156,7 @@ func runProxy(parent context.Context, cfg *runConfig) error {
 		requestHeaders := r.Header.Clone()
 		requestHeaders.Del(cfg.proxyTargetHdr)
 
-		tunnelReq := protocol.HTTPTunnelRequest{
+		tunnelReq := httpprotocol.HTTPTunnelRequest{
 			Method:  r.Method,
 			Path:    r.URL.RequestURI(),
 			Headers: requestHeaders,
@@ -169,18 +171,18 @@ func runProxy(parent context.Context, cfg *runConfig) error {
 			_ = node.Connect(ctx, target)
 		}
 
-		resp, err := protocol.TunnelHTTP(ctx, node.Host(), target.ID, protocol.HTTPTunnelOpenRequest{
+		resp, err := httpprotocol.TunnelHTTP(ctx, node.Host(), target.ID, httpprotocol.HTTPTunnelOpenRequest{
 			Biscuit:    strings.TrimSpace(cfg.proxyBiscuit),
 			Capability: capability,
 			Request:    tunnelReq,
 		})
 		if err != nil {
-			observer.OnFailure(target.ID.String(), protocol.FailureTypeLiveness)
+			observer.OnFailure(target.ID.String(), a2aprotocol.FailureTypeLiveness)
 			http.Error(w, fmt.Sprintf("tunnel request failed: %v", err), http.StatusBadGateway)
 			return
 		}
 		if resp.Error != "" {
-			observer.OnFailure(target.ID.String(), protocol.FailureTypeRemote)
+			observer.OnFailure(target.ID.String(), a2aprotocol.FailureTypeRemote)
 			status := resp.StatusCode
 			if status == 0 {
 				status = http.StatusBadGateway

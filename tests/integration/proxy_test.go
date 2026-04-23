@@ -37,7 +37,8 @@ import (
 	"sam/pkg/economy"
 	"sam/pkg/identity"
 	samnet "sam/pkg/net"
-	"sam/pkg/protocol"
+	a2aprotocol "sam/pkg/protocol/a2a"
+	httpprotocol "sam/pkg/protocol/http"
 )
 
 const proxyRecordVersion = 1
@@ -65,7 +66,7 @@ func runProxyTunnelLegacyFlowIntegration(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmpHome, ".config"))
 
 	federation := "proxy-legacy"
-	observer, err := protocol.NewBoltObserverForFederation(federation)
+	observer, err := a2aprotocol.NewBoltObserverForFederation(federation)
 	if err != nil {
 		t.Fatalf("creating observer: %v", err)
 	}
@@ -105,10 +106,10 @@ func runProxyTunnelLegacyFlowIntegration(t *testing.T) {
 	}
 	defer func() { _ = providerNode.Stop(context.Background()) }()
 
-	tunnelSvc, err := protocol.NewHTTPTunnelService(
+	tunnelSvc, err := httpprotocol.NewHTTPTunnelService(
 		providerNode.Host(),
 		backend.URL,
-		protocol.WithHTTPTunnelSkillGate(economy.NewBiscuitSkillGate(nil)),
+		httpprotocol.WithHTTPTunnelSkillGate(economy.NewBiscuitSkillGate(nil)),
 	)
 	if err != nil {
 		t.Fatalf("creating tunnel service: %v", err)
@@ -244,7 +245,7 @@ func runProxyTunnelUnauthorizedBeforeDial(t *testing.T) {
 	}
 	defer func() { _ = providerNode.Stop(context.Background()) }()
 
-	tunnelSvc, err := protocol.NewHTTPTunnelService(providerNode.Host(), backend.URL)
+	tunnelSvc, err := httpprotocol.NewHTTPTunnelService(providerNode.Host(), backend.URL)
 	if err != nil {
 		t.Fatalf("creating tunnel service: %v", err)
 	}
@@ -259,7 +260,7 @@ func runProxyTunnelUnauthorizedBeforeDial(t *testing.T) {
 	}
 	defer func() { _ = consumerNode.Stop(context.Background()) }()
 
-	proxySrv := httptest.NewServer(proxyTunnelHandler(consumerNode, protocol.NopObserver{}, "X-SAM-Target", "", ""))
+	proxySrv := httptest.NewServer(proxyTunnelHandler(consumerNode, a2aprotocol.NopObserver{}, "X-SAM-Target", "", ""))
 	defer proxySrv.Close()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, proxySrv.URL+"/blocked", nil)
@@ -283,7 +284,7 @@ func runProxyTunnelUnauthorizedBeforeDial(t *testing.T) {
 	}
 }
 
-func proxyTunnelHandler(node samnet.Node, observer protocol.Observer, targetHeader, biscuit string, passport string) http.Handler {
+func proxyTunnelHandler(node samnet.Node, observer a2aprotocol.Observer, targetHeader, biscuit string, passport string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.TrimSpace(passport) == "" {
 			http.Error(w, "unauthorized: local identity login required", http.StatusUnauthorized)
@@ -311,10 +312,10 @@ func proxyTunnelHandler(node samnet.Node, observer protocol.Observer, targetHead
 		headers.Del(targetHeader)
 
 		start := time.Now()
-		resp, err := protocol.TunnelHTTP(r.Context(), node.Host(), targetID, protocol.HTTPTunnelOpenRequest{
+		resp, err := httpprotocol.TunnelHTTP(r.Context(), node.Host(), targetID, httpprotocol.HTTPTunnelOpenRequest{
 			Biscuit:    biscuit,
 			Capability: "risk-audit",
-			Request: protocol.HTTPTunnelRequest{
+			Request: httpprotocol.HTTPTunnelRequest{
 				Method:  r.Method,
 				Path:    r.URL.RequestURI(),
 				Headers: headers,
@@ -322,12 +323,12 @@ func proxyTunnelHandler(node samnet.Node, observer protocol.Observer, targetHead
 			},
 		})
 		if err != nil {
-			observer.OnFailure(targetID.String(), protocol.FailureTypeLiveness)
+			observer.OnFailure(targetID.String(), a2aprotocol.FailureTypeLiveness)
 			http.Error(w, fmt.Sprintf("tunnel request failed: %v", err), http.StatusBadGateway)
 			return
 		}
 		if resp.Error != "" {
-			observer.OnFailure(targetID.String(), protocol.FailureTypeRemote)
+			observer.OnFailure(targetID.String(), a2aprotocol.FailureTypeRemote)
 			status := resp.StatusCode
 			if status == 0 {
 				status = http.StatusBadGateway

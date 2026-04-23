@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package protocol
+package mcp
 
 import (
 	"bufio"
@@ -29,6 +29,7 @@ import (
 
 	"sam/pkg/economy"
 	"sam/pkg/identity"
+	"sam/pkg/protocol/middleware"
 	"sam/pkg/reputation"
 )
 
@@ -72,9 +73,6 @@ func NewMCPBridge(h host.Host, verifier economy.Verifier, connector MCPConnector
 	}
 
 	b := &MCPBridge{host: h, verifier: verifier, connector: connector}
-	if err := identity.EnsurePassportAuth(h, ""); err != nil {
-		return nil, fmt.Errorf("installing passport auth: %w", err)
-	}
 	h.SetStreamHandler(MCPProtocolID, b.handleInbound)
 	return b, nil
 }
@@ -100,7 +98,7 @@ func (b *MCPBridge) Open(ctx context.Context, peerID peer.ID, req BridgeOpenRequ
 
 func (b *MCPBridge) handleInbound(stream network.Stream) {
 	defer func() { _ = stream.Close() }()
-	if _, err := identity.EnsureAuthenticatedPeer(context.Background(), b.host, stream.Conn().RemotePeer()); err != nil {
+	if _, err := identity.AuthenticatedPeerPassport(b.host, stream.Conn().RemotePeer()); err != nil {
 		_ = writeBridgeError(stream, fmt.Errorf("passport authentication required: %w", err))
 		return
 	}
@@ -134,6 +132,14 @@ func (b *MCPBridge) handleInbound(stream network.Stream) {
 	}
 	if openReq.Nonce == "" {
 		_ = writeBridgeError(stream, economy.ErrMissingMicropayNonce)
+		return
+	}
+	resource := openReq.Capability
+	if resource == "" {
+		resource = MCPProtocolID
+	}
+	if err := (middleware.PassportAuthz{}).CheckCapability(context.Background(), openReq.BiscuitToken, "mcp.tool_call", resource); err != nil {
+		_ = writeBridgeError(stream, err)
 		return
 	}
 

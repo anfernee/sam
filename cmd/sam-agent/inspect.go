@@ -23,7 +23,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"sam/pkg/economy"
-	"sam/pkg/protocol"
+	protocol "sam/pkg/protocol/discovery"
 )
 
 // newInspectCmd creates the "sam inspect" command for decoding SAM artifacts.

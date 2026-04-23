@@ -116,20 +116,27 @@ func (n *node) Start(ctx context.Context) error {
 		return fmt.Errorf("creating libp2p host: %w", err)
 	}
 
-	n.host = h
+	middlewares := []Middleware{
+		NewAuthMiddleware(AuthMiddlewareConfig{
+			AttemptAuthWhenMissing: n.opts.AttemptAuthWhenMissing,
+			ProtocolPolicies:       n.opts.ProtocolPolicies,
+		}),
+	}
+	middlewares = append(middlewares, n.opts.StreamMiddlewares...)
+	n.host = WrapHost(h, middlewares...)
 	n.kdht = kdht
 
 	span.SetAttributes(
-		attribute.String("peer_id", h.ID().String()),
-		attribute.Int("listen_addrs", len(h.Addrs())),
+		attribute.String("peer_id", n.host.ID().String()),
+		attribute.Int("listen_addrs", len(n.host.Addrs())),
 	)
 
 	// Start relay v2 service if configured, allowing other peers to
 	// relay through this node.
 	if n.opts.EnableRelayService {
-		n.relay, err = relayv2.New(h)
+		n.relay, err = relayv2.New(n.host)
 		if err != nil {
-			_ = h.Close()
+			_ = n.host.Close()
 			return fmt.Errorf("starting relay service: %w", err)
 		}
 		n.logger.Info("relay v2 service enabled")
@@ -137,7 +144,7 @@ func (n *node) Start(ctx context.Context) error {
 
 	// Bootstrap the DHT routing table.
 	if err := n.kdht.Bootstrap(ctx); err != nil {
-		_ = h.Close()
+		_ = n.host.Close()
 		return fmt.Errorf("bootstrapping DHT: %w", err)
 	}
 
@@ -148,19 +155,19 @@ func (n *node) Start(ctx context.Context) error {
 
 	// Initialize routing-based discovery backed by the DHT.
 	n.disc = drouting.NewRoutingDiscovery(n.kdht)
-	gs, err := pubsub.NewGossipSub(ctx, h)
+	gs, err := pubsub.NewGossipSub(ctx, n.host)
 	if err != nil {
-		_ = h.Close()
+		_ = n.host.Close()
 		return fmt.Errorf("initializing gossipsub: %w", err)
 	}
 	n.gsub = gs
-	trust, err := reputation.NewTrustStore(h, gs)
+	trust, err := reputation.NewTrustStore(n.host, gs)
 	if err != nil {
-		_ = h.Close()
+		_ = n.host.Close()
 		return fmt.Errorf("initializing reputation trust store: %w", err)
 	}
 	if err := trust.Start(ctx); err != nil {
-		_ = h.Close()
+		_ = n.host.Close()
 		return fmt.Errorf("starting reputation trust store: %w", err)
 	}
 	n.trust = trust
@@ -169,8 +176,8 @@ func (n *node) Start(ctx context.Context) error {
 	n.started = true
 
 	n.logger.Info("node started",
-		"peer_id", h.ID(),
-		"addrs", h.Addrs(),
+		"peer_id", n.host.ID(),
+		"addrs", n.host.Addrs(),
 		"relay_fallback", n.opts.RelayFallbackHost,
 		"rendezvous_namespace", n.opts.RendezvousNamespace,
 	)

@@ -25,7 +25,7 @@ import (
 
 	"sam/pkg/economy"
 	"sam/pkg/identity"
-	"sam/pkg/protocol"
+	httpprotocol "sam/pkg/protocol/http"
 )
 
 func newUpCmd(cfg *runConfig) *cobra.Command {
@@ -75,18 +75,18 @@ func runUp(parent context.Context, cfg *runConfig) error {
 	}
 	log.Info("hub configured", "url", cfg.hub, "peer_id", creds.PeerID)
 
-	var tunnel *protocol.HTTPTunnelService
+	var tunnel *httpprotocol.HTTPTunnelService
 	if cfg.tunnelHTTPEndpoint != "" {
-		tunnel, err = protocol.NewHTTPTunnelService(
+		tunnel, err = httpprotocol.NewHTTPTunnelService(
 			node.Host(),
 			cfg.tunnelHTTPEndpoint,
-			protocol.WithHTTPTunnelSkillGate(economy.NewBiscuitSkillGate(nil)),
+			httpprotocol.WithHTTPTunnelSkillGate(economy.NewBiscuitSkillGate(nil)),
 		)
 		if err != nil {
 			return fmt.Errorf("initializing HTTP tunnel listener: %w", err)
 		}
 		defer tunnel.Close()
-		log.Info("HTTP tunnel listener enabled", "protocol", protocol.HTTPTunnelProtocolID, "endpoint", cfg.tunnelHTTPEndpoint)
+		log.Info("HTTP tunnel listener enabled", "protocol", httpprotocol.HTTPTunnelProtocolID, "endpoint", cfg.tunnelHTTPEndpoint)
 	}
 
 	addrs := make([]string, 0, len(node.Addrs()))

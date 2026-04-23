@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package protocol
+package a2a
 
 import (
 	"bufio"
@@ -30,9 +30,11 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 	coreprotocol "github.com/libp2p/go-libp2p/core/protocol"
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"sam/pkg/economy"
 	"sam/pkg/identity"
+	"sam/pkg/protocol/middleware"
 	"sam/pkg/reputation"
 )
 
@@ -44,6 +46,11 @@ const (
 	FailureTypeRemote   = "Remote"
 	FailureTypeInternal = "Internal"
 )
+
+// MCPConnector opens a local MCP JSON-RPC transport endpoint.
+type MCPConnector interface {
+	Open(ctx context.Context) (mcp.Transport, error)
+}
 
 // Observer receives task health callbacks after every A2A attempt.
 type Observer interface {
@@ -153,9 +160,6 @@ func NewA2AService(h host.Host, connector MCPConnector, observer Observer, opts 
 	}
 	if observer == nil {
 		observer = NopObserver{}
-	}
-	if err := identity.EnsurePassportAuth(h, ""); err != nil {
-		return nil, fmt.Errorf("installing passport auth: %w", err)
 	}
 	s := &A2AService{host: h, observer: observer, mcp: connector, gate: AllowAllGate{}}
 	for _, o := range opts {
@@ -338,7 +342,11 @@ func (s *A2AService) handleStream(stream network.Stream) {
 		fail(FailureTypeProtocol, fmt.Errorf("missing biscuit token"))
 		return
 	}
-	claims, err := identity.EnsureAuthenticatedPeer(context.Background(), s.host, stream.Conn().RemotePeer())
+	if err := (middleware.PassportAuthz{}).CheckCapability(context.Background(), header.Biscuit, "a2a.negotiate", strings.TrimSpace(header.Capability)); err != nil {
+		fail(FailureTypeProtocol, err)
+		return
+	}
+	claims, err := identity.AuthenticatedPeerPassport(s.host, stream.Conn().RemotePeer())
 	if err != nil {
 		fail(FailureTypeProtocol, fmt.Errorf("passport authentication required: %w", err))
 		return

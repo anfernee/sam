@@ -28,7 +28,9 @@ import (
 
 	"sam/pkg/economy"
 	samnet "sam/pkg/net"
-	"sam/pkg/protocol"
+	a2aprotocol "sam/pkg/protocol/a2a"
+	protocol "sam/pkg/protocol/discovery"
+	mcpprotocol "sam/pkg/protocol/mcp"
 )
 
 // newPublishCmd creates the "sam publish" group command and attaches its
@@ -136,7 +138,7 @@ func runPublish(parent context.Context, cfg *runConfig) error {
 		client: &http.Client{Timeout: 30 * time.Second},
 		addr:   fmt.Sprintf("http://127.0.0.1:%d", cfg.mcpPort),
 	}
-	if _, err := protocol.NewMCPBridge(node.Host(), economy.AllowAllVerifier{}, connector); err != nil {
+	if _, err := mcpprotocol.NewMCPBridge(node.Host(), economy.AllowAllVerifier{}, connector); err != nil {
 		return fmt.Errorf("creating MCP bridge: %w", err)
 	}
 
@@ -155,12 +157,12 @@ func runPublish(parent context.Context, cfg *runConfig) error {
 }
 
 func ensureSecurePublishPreflight() error {
-	gate, closeFn, err := protocol.NewPassportGateWithCleanup()
+	gate, closeFn, err := a2aprotocol.NewPassportGateWithCleanup()
 	if err != nil {
 		return fmt.Errorf("publish security preflight failed: %w", err)
 	}
 	defer func() { _ = closeFn() }()
-	if protocol.IsAllowAllGate(gate) {
+	if a2aprotocol.IsAllowAllGate(gate) {
 		return fmt.Errorf("refusing publish: A2A authentication middleware is permissive (AllowAllGate)")
 	}
 	return nil

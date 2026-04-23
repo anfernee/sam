@@ -29,7 +29,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"sam/pkg/economy"
-	"sam/pkg/protocol"
+	protocol "sam/pkg/protocol/discovery"
+	mcpprotocol "sam/pkg/protocol/mcp"
 )
 
 func newPublishMCPCmd(cfg *runConfig) *cobra.Command {
@@ -85,7 +86,7 @@ func runPublishMCP(parent context.Context, cfg *runConfig) error {
 		client: &http.Client{Timeout: 30 * time.Second},
 		addr:   fmt.Sprintf("http://127.0.0.1:%d", cfg.mcpPort),
 	}
-	if _, err := protocol.NewMCPBridge(node.Host(), economy.AllowAllVerifier{}, connector); err != nil {
+	if _, err := mcpprotocol.NewMCPBridge(node.Host(), economy.AllowAllVerifier{}, connector); err != nil {
 		return fmt.Errorf("creating MCP bridge: %w", err)
 	}
 

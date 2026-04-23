@@ -24,7 +24,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"sam/pkg/protocol"
+	protocol "sam/pkg/protocol/discovery"
 )
 
 func newPublishCardCmd(cfg *runConfig) *cobra.Command {

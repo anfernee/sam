@@ -29,7 +29,8 @@ import (
 	"sam/pkg/economy"
 	"sam/pkg/identity"
 	samnet "sam/pkg/net"
-	"sam/pkg/protocol"
+	a2aprotocol "sam/pkg/protocol/a2a"
+	protocol "sam/pkg/protocol/discovery"
 )
 
 func newCallCmd(cfg *runConfig) *cobra.Command {
@@ -99,7 +100,7 @@ func runCall(parent context.Context, cfg *runConfig, targetArg string) error {
 		return fmt.Errorf("configuring local passport auth: %w", err)
 	}
 
-	observer, err := protocol.NewBoltObserverWithFallback(defaultFederationID)
+	observer, err := a2aprotocol.NewBoltObserverWithFallback(defaultFederationID)
 	if err != nil {
 		return fmt.Errorf("creating reputation observer: %w", err)
 	}
@@ -117,7 +118,7 @@ func runCall(parent context.Context, cfg *runConfig, targetArg string) error {
 		return err
 	}
 
-	resp, err := protocol.Execute(ctx, node.Host(), protocol.ExecuteRequest{
+	resp, err := a2aprotocol.Execute(ctx, node.Host(), a2aprotocol.ExecuteRequest{
 		Target:     target,
 		Capability: capability,
 		Biscuit:    cfg.callBiscuit,

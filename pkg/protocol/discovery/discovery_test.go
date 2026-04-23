@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package protocol_test
+package discovery_test
 
 import (
 	"context"
@@ -30,7 +30,7 @@ import (
 	"github.com/multiformats/go-multiaddr"
 
 	samnet "sam/pkg/net"
-	"sam/pkg/protocol"
+	protocol "sam/pkg/protocol/discovery"
 )
 
 type fakeDiscoveryNode struct {

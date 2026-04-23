@@ -55,7 +55,8 @@ import (
 	"sam/pkg/economy"
 	"sam/pkg/identity"
 	samnet "sam/pkg/net"
-	"sam/pkg/protocol"
+	protocol "sam/pkg/protocol/discovery"
+	mcpprotocol "sam/pkg/protocol/mcp"
 )
 
 // ---------------------------------------------------------------------------
@@ -225,7 +226,7 @@ func runMeshPublisher() error {
 	}
 
 	// meshAllowVerifier accepts any token so the subscriber test needs no real Biscuit token.
-	if _, err := protocol.NewMCPBridge(node.Host(), meshAllowVerifier{}, meshEchoConnector{}); err != nil {
+	if _, err := mcpprotocol.NewMCPBridge(node.Host(), meshAllowVerifier{}, meshEchoConnector{}); err != nil {
 		return fmt.Errorf("publisher bridge setup: %w", err)
 	}
 
@@ -322,7 +323,7 @@ func runMeshSubscriber() error {
 	}
 
 	// 3. Open a QUIC/MCP bridge stream to the publisher and do an echo round-trip.
-	bridge, err := protocol.NewMCPBridge(node.Host(), meshAllowVerifier{}, meshEchoConnector{})
+	bridge, err := mcpprotocol.NewMCPBridge(node.Host(), meshAllowVerifier{}, meshEchoConnector{})
 	if err != nil {
 		return fmt.Errorf("subscriber bridge setup: %w", err)
 	}
@@ -337,8 +338,8 @@ func runMeshSubscriber() error {
 // Round-trip helper
 // ---------------------------------------------------------------------------
 
-func meshEchoRoundTrip(ctx context.Context, bridge *protocol.MCPBridge, target peer.ID) error {
-	stream, err := bridge.Open(ctx, target, protocol.BridgeOpenRequest{
+func meshEchoRoundTrip(ctx context.Context, bridge *mcpprotocol.MCPBridge, target peer.ID) error {
+	stream, err := bridge.Open(ctx, target, mcpprotocol.BridgeOpenRequest{
 		BiscuitToken: "mesh-token",
 		Amount:       1,
 		Asset:        "sam-credit",

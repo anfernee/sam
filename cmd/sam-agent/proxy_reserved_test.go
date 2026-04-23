@@ -29,7 +29,7 @@ import (
 
 	"sam/pkg/identity"
 	samnet "sam/pkg/net"
-	"sam/pkg/protocol"
+	protocol "sam/pkg/protocol/discovery"
 )
 
 func TestExtractBearerToken(t *testing.T) {

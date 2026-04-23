@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package protocol
+package httpprotocol
 
 import (
 	"bufio"
@@ -96,10 +96,6 @@ func NewHTTPTunnelService(h host.Host, endpoint string, opts ...HTTPTunnelServic
 	for _, opt := range opts {
 		opt(s)
 	}
-	if err := identity.EnsurePassportAuth(h, ""); err != nil {
-		return nil, fmt.Errorf("installing passport auth: %w", err)
-	}
-
 	h.SetStreamHandler(HTTPTunnelProtocolID, s.handleStream)
 	return s, nil
 }
@@ -177,7 +173,7 @@ func (s *HTTPTunnelService) handleStream(stream network.Stream) {
 }
 
 func (s *HTTPTunnelService) verifyMetadata(ctx context.Context, remotePeer peer.ID, req *HTTPTunnelOpenRequest) error {
-	if _, err := identity.EnsureAuthenticatedPeer(ctx, s.host, remotePeer); err != nil {
+	if _, err := identity.AuthenticatedPeerPassport(s.host, remotePeer); err != nil {
 		return fmt.Errorf("passport authentication required: %w", err)
 	}
 	if strings.TrimSpace(req.Biscuit) == "" {
