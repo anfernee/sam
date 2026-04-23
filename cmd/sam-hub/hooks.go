@@ -85,7 +85,10 @@ func (n *notifier) Disconnected(_ network.Network, c network.Conn) {
 			return
 		}
 		// Notify the mesh about the peer disconnection
-		n.hub.EventTopic.Publish(context.Background(), data)
+		if err := n.hub.EventTopic.Publish(context.Background(), data); err != nil {
+			fmt.Printf("Failed to publish mesh event: %v\n", err)
+			return
+		}
 		fmt.Printf("[Mesh] Peer %s left. Broadcasted departure to agents.\n", p)
 	}
 }

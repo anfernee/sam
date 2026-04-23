@@ -38,7 +38,11 @@ func main() {
 			if err != nil {
 				log.Fatalf("Critical: %v", err)
 			}
-			defer store.Close()
+			defer func() {
+				if err := store.Close(); err != nil {
+					log.Printf("closing store: %v", err)
+				}
+			}()
 
 			priv := getOrGenerateKey(store)
 			// Temporary host to determine PeerID
@@ -84,7 +88,11 @@ func main() {
 			if err != nil {
 				log.Fatalf("Failed to open store: %v", err)
 			}
-			defer store.Close()
+			defer func() {
+				if err := store.Close(); err != nil {
+					log.Printf("closing store: %v", err)
+				}
+			}()
 
 			token := tokenFlag
 			if token == "" {
@@ -135,7 +143,9 @@ func getOrGenerateKey(s *Store) crypto.PrivKey {
 			log.Fatalf("Failed to generate key: %v", err)
 		}
 		raw, _ := crypto.MarshalPrivateKey(priv)
-		s.SaveKey(raw)
+		if err := s.SaveKey(raw); err != nil {
+			log.Fatalf("Failed to save key: %v", err)
+		}
 		return priv
 	}
 	priv, err := crypto.UnmarshalPrivateKey(kb)

@@ -154,7 +154,7 @@ func (h *Hub) handleCallback(w http.ResponseWriter, r *http.Request) {
 	rawID, _ := token.Extra("id_token").(string)
 	idToken, err := h.Verifier.Verify(ctx, rawID)
 	if err != nil {
-		http.Error(w, "ID Token verification failed", 401)
+		http.Error(w, "ID Token verification failed", http.StatusUnauthorized)
 		return
 	}
 	// standard claims mapping
@@ -188,50 +188,62 @@ func (h *Hub) handleCallback(w http.ResponseWriter, r *http.Request) {
 	h.gater.mu.Unlock()
 
 	w.Header().Set("Content-Type", "text/html")
-	fmt.Fprintf(w, `<html><body>
+	if _, err := fmt.Fprintf(w, `<html><body>
 		<h3>Sovereign Identity Verified!</h3>
 		<p>Peer <code>%s</code> is now part of mesh <code>%s</code></p>
 		<p>Identity: <code>%s</code></p>
 		<hr/>
 		<p>Standard Identity Biscuit:</p>
 		<textarea rows="5" cols="60">%s</textarea>
-	</body></html>`, p, h.MeshID, claims.Email, biscuitToken)
+	</body></html>`, p, h.MeshID, claims.Email, biscuitToken); err != nil {
+		log.Printf("writing callback response: %v", err)
+	}
 }
 
 func (h *Hub) issueStandardBiscuit(p peer.ID, sub string, email string, groups []string) (string, error) {
 	builder := biscuit.NewBuilder(h.BiscuitKey)
 
 	// user_id mapping (sub)
-	builder.AddAuthorityFact(biscuit.Fact{Predicate: biscuit.Predicate{
+	if err := builder.AddAuthorityFact(biscuit.Fact{Predicate: biscuit.Predicate{
 		Name: "user_id",
 		IDs:  []biscuit.Term{biscuit.String(sub)},
-	}})
+	}}); err != nil {
+		return "", err
+	}
 
 	// user_email mapping (email)
-	builder.AddAuthorityFact(biscuit.Fact{Predicate: biscuit.Predicate{
+	if err := builder.AddAuthorityFact(biscuit.Fact{Predicate: biscuit.Predicate{
 		Name: "user_email",
 		IDs:  []biscuit.Term{biscuit.String(email)},
-	}})
+	}}); err != nil {
+		return "", err
+	}
 
 	// group mapping (groups)
 	for _, g := range groups {
-		builder.AddAuthorityFact(biscuit.Fact{Predicate: biscuit.Predicate{
+		if err := builder.AddAuthorityFact(biscuit.Fact{Predicate: biscuit.Predicate{
 			Name: "group",
 			IDs:  []biscuit.Term{biscuit.String(g)},
-		}})
+		}}); err != nil {
+			return "", err
+		}
 	}
 
 	// peer_id mapping (hardware binding)
-	builder.AddAuthorityFact(biscuit.Fact{Predicate: biscuit.Predicate{
+	if err := builder.AddAuthorityFact(biscuit.Fact{Predicate: biscuit.Predicate{
 		Name: "peer_id",
 		IDs:  []biscuit.Term{biscuit.String(p.String())},
-	}})
+	}}); err != nil {
+		return "", err
+	}
 
 	// mesh_id mapping (namespace)
-	builder.AddAuthorityFact(biscuit.Fact{Predicate: biscuit.Predicate{
+	if err := builder.AddAuthorityFact(biscuit.Fact{Predicate: biscuit.Predicate{
 		Name: "mesh_id",
 		IDs:  []biscuit.Term{biscuit.String(h.MeshID)},
-	}})
+	}}); err != nil {
+		return "", err
+	}
 
 	t, err := builder.Build()
 	if err != nil {
@@ -253,7 +265,9 @@ func (h *Hub) startWatchdog() {
 			for pID, connectedAt := range h.gater.pending {
 				if now.Sub(connectedAt) > GracePeriod {
 					fmt.Printf("[Security] Evicting unauthenticated peer: %s\n", pID)
-					h.Host.Network().ClosePeer(pID)
+					if err := h.Host.Network().ClosePeer(pID); err != nil {
+						log.Printf("closing unauthenticated peer %s: %v", pID, err)
+					}
 					delete(h.gater.pending, pID)
 				}
 			}
@@ -286,12 +300,18 @@ func main() {
 			if err != nil {
 				log.Fatal(err)
 			}
-			defer listener.Close()
+			defer func() {
+				if err := listener.Close(); err != nil {
+					log.Printf("closing p2p listener: %v", err)
+				}
+			}()
 			go func() {
 				server := &http.Server{
 					Handler: mux,
 				}
-				server.Serve(listener)
+				if err := server.Serve(listener); err != nil {
+					log.Printf("p2p http server exited: %v", err)
+				}
 			}()
 
 			fmt.Printf("SAM Hub Online (QUIC + TCP)\n")

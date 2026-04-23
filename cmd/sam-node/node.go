@@ -59,7 +59,9 @@ func (n *SamNode) SecureStreamHandler(pid protocol.ID, handler network.StreamHan
 		if !isTrusted {
 			// DROP: Peer has not completed the /sam/auth/1.0.0 handshake
 			fmt.Printf("Blocked unauthorized stream request for %s from %s\n", pid, s.Conn().RemotePeer())
-			s.Reset()
+			if err := s.Reset(); err != nil {
+				fmt.Printf("Failed to reset unauthorized stream: %v\n", err)
+			}
 			return
 		}
 
@@ -107,7 +109,11 @@ func (n *SamNode) ListenForMeshEvents(ctx context.Context) error {
 
 // HandleAuthHandshake handles incoming Identity Biscuits
 func (n *SamNode) HandleAuthHandshake(s network.Stream) {
-	defer s.Close()
+	defer func() {
+		if err := s.Close(); err != nil {
+			fmt.Printf("Failed to close auth stream: %v\n", err)
+		}
+	}()
 
 	// MVP: Logic to read Biscuit from stream, verify against Hub Public Key,
 	// and ensure it is bound to the connecting PeerID.
