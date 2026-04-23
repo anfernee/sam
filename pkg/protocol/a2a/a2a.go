@@ -47,8 +47,8 @@ const (
 	FailureTypeInternal = "Internal"
 )
 
-// MCPConnector opens a local MCP JSON-RPC transport endpoint.
-type MCPConnector interface {
+// JSONRPCConnector opens a local backend JSON-RPC transport endpoint.
+type JSONRPCConnector interface {
 	Open(ctx context.Context) (mcp.Transport, error)
 }
 
@@ -93,7 +93,7 @@ type ExecuteRequest struct {
 	Capability string
 	Biscuit    string
 	Payment    economy.Micropayment
-	MCPRequest json.RawMessage
+	Request    json.RawMessage
 }
 
 type a2aHeader struct {
@@ -126,11 +126,11 @@ func IsAllowAllGate(g FederationGate) bool {
 	}
 }
 
-// A2AService serves /sam/a2a/1.0 and forwards JSON-RPC over a local MCP connector.
+// A2AService serves /sam/a2a/1.0 and forwards JSON-RPC over a local backend connector.
 type A2AService struct {
 	host      host.Host
 	observer  Observer
-	mcp       MCPConnector
+	backend   JSONRPCConnector
 	gate      FederationGate
 	skillGate *economy.BiscuitSkillGate
 }
@@ -151,17 +151,17 @@ func WithSkillGate(g *economy.BiscuitSkillGate) A2AServiceOption {
 }
 
 // NewA2AService registers a handler for /sam/a2a/1.0 on host h.
-func NewA2AService(h host.Host, connector MCPConnector, observer Observer, opts ...A2AServiceOption) (*A2AService, error) {
+func NewA2AService(h host.Host, connector JSONRPCConnector, observer Observer, opts ...A2AServiceOption) (*A2AService, error) {
 	if h == nil {
 		return nil, fmt.Errorf("host is nil")
 	}
 	if connector == nil {
-		return nil, fmt.Errorf("mcp connector is nil")
+		return nil, fmt.Errorf("backend connector is nil")
 	}
 	if observer == nil {
 		observer = NopObserver{}
 	}
-	s := &A2AService{host: h, observer: observer, mcp: connector, gate: AllowAllGate{}}
+	s := &A2AService{host: h, observer: observer, backend: connector, gate: AllowAllGate{}}
 	for _, o := range opts {
 		o(s)
 	}
@@ -207,12 +207,12 @@ func Execute(ctx context.Context, h host.Host, req ExecuteRequest, observer Obse
 	if strings.TrimSpace(req.Biscuit) == "" {
 		return nil, fmt.Errorf("biscuit token is required")
 	}
-	payload := []byte(strings.TrimSpace(string(req.MCPRequest)))
+	payload := []byte(strings.TrimSpace(string(req.Request)))
 	if len(payload) == 0 {
-		return nil, fmt.Errorf("mcp request is required")
+		return nil, fmt.Errorf("json-rpc request is required")
 	}
 	if _, err := jsonrpc.DecodeMessage(payload); err != nil {
-		return nil, fmt.Errorf("invalid mcp request JSON-RPC payload: %w", err)
+		return nil, fmt.Errorf("invalid A2A JSON-RPC payload: %w", err)
 	}
 
 	if observer == nil {
@@ -353,7 +353,7 @@ func (s *A2AService) handleStream(stream network.Stream) {
 	}
 
 	// Identity gate: verify the requester's PeerID is allowed in this federation
-	// before forwarding any payload to the local MCP backend.
+	// before forwarding any payload to the local agent backend.
 	authCtx := withAuthenticatedPassportClaims(context.Background(), claims)
 	if err := s.gate.Allow(authCtx, peerID, strings.TrimSpace(header.Capability)); err != nil {
 		fail(FailureTypeProtocol, fmt.Errorf("federation gate denied peer %s: %w", peerID, err))
@@ -382,25 +382,25 @@ func (s *A2AService) handleStream(stream network.Stream) {
 		return
 	}
 
-	transport, err := s.mcp.Open(context.Background())
+	transport, err := s.backend.Open(context.Background())
 	if err != nil {
-		fail(FailureTypeInternal, fmt.Errorf("opening local MCP transport: %w", err))
+		fail(FailureTypeInternal, fmt.Errorf("opening local backend transport: %w", err))
 		return
 	}
 	conn, err := transport.Connect(context.Background())
 	if err != nil {
-		fail(FailureTypeInternal, fmt.Errorf("connecting local MCP transport: %w", err))
+		fail(FailureTypeInternal, fmt.Errorf("connecting local backend transport: %w", err))
 		return
 	}
 	defer func() { _ = conn.Close() }()
 
 	if err := conn.Write(context.Background(), msg); err != nil {
-		fail(FailureTypeInternal, fmt.Errorf("writing local MCP request: %w", err))
+		fail(FailureTypeInternal, fmt.Errorf("writing local backend request: %w", err))
 		return
 	}
 	respMsg, err := conn.Read(context.Background())
 	if err != nil {
-		fail(FailureTypeInternal, fmt.Errorf("reading local MCP response: %w", err))
+		fail(FailureTypeInternal, fmt.Errorf("reading local backend response: %w", err))
 		return
 	}
 	respBytes, err := jsonrpc.EncodeMessage(respMsg)

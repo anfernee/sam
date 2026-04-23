@@ -128,7 +128,7 @@ func runCall(parent context.Context, cfg *runConfig, targetArg string) error {
 			Nonce:      nonce,
 			Capability: capability,
 		},
-		MCPRequest: requestJSON,
+		Request: requestJSON,
 	}, observer)
 	if err != nil {
 		return fmt.Errorf("A2A call failed: %w", err)

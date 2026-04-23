@@ -30,6 +30,7 @@ import (
 	"sam/pkg/identity"
 	samnet "sam/pkg/net"
 	protocol "sam/pkg/protocol/discovery"
+	mcpprotocol "sam/pkg/protocol/mcp"
 )
 
 func TestExtractBearerToken(t *testing.T) {
@@ -122,7 +123,7 @@ func TestSAMReservedSearchReturnsPublishedWriterCard(t *testing.T) {
 	if priv == nil {
 		t.Fatalf("publisher private key missing")
 	}
-	card, err := protocol.NewAgentCard(nodeA.PeerID(), []string{"writer"}, []protocol.MCPResource{{Name: "writer", Kind: "tool", Endpoint: "mcp://writer"}}, priv)
+	card, err := protocol.NewAgentCard(nodeA.PeerID(), []string{"writer"}, priv, mcpprotocol.WithResources([]mcpprotocol.Resource{{Name: "writer", Kind: "tool", Endpoint: "mcp://writer"}}))
 	if err != nil {
 		t.Fatalf("creating writer card: %v", err)
 	}

@@ -69,12 +69,12 @@ func runPublishMCP(parent context.Context, cfg *runConfig) error {
 		return fmt.Errorf("local node private key unavailable")
 	}
 
-	resource := protocol.MCPResource{
+	resource := mcpprotocol.Resource{
 		Name:     strings.TrimSpace(cfg.resourceName),
 		Kind:     strings.TrimSpace(cfg.resourceKind),
 		Endpoint: fmt.Sprintf("http://127.0.0.1:%d", cfg.mcpPort),
 	}
-	card, err := protocol.NewAgentCard(node.PeerID(), cfg.capabilities, []protocol.MCPResource{resource}, priv)
+	card, err := protocol.NewAgentCard(node.PeerID(), cfg.capabilities, priv, mcpprotocol.WithResources([]mcpprotocol.Resource{resource}))
 	if err != nil {
 		return fmt.Errorf("building agent card: %w", err)
 	}

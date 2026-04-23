@@ -12,17 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package discovery_test
+package a2a
 
 import (
 	"testing"
-	"time"
 
-	"github.com/a2aproject/a2a-go/v2/a2a"
+	a2asdk "github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/peer"
 
-	protocol "sam/pkg/protocol/discovery"
+	"sam/pkg/protocol/discovery"
+	mcpprotocol "sam/pkg/protocol/mcp"
 )
 
 func TestToA2ACard(t *testing.T) {
@@ -35,22 +35,22 @@ func TestToA2ACard(t *testing.T) {
 		t.Fatalf("IDFromPrivateKey() error = %v", err)
 	}
 
-	card, err := protocol.NewAgentCard(
+	card, err := discovery.NewAgentCard(
 		pid,
 		[]string{"inference", "search"},
-		[]protocol.MCPResource{{Name: "mcp", Kind: "tool"}},
 		priv,
+		mcpprotocol.WithResources([]mcpprotocol.Resource{{Name: "mcp", Kind: "tool"}}),
 	)
 	if err != nil {
 		t.Fatalf("NewAgentCard() error = %v", err)
 	}
 
-	a2aCard, err := card.ToA2ACard("https://example.com/a2a")
+	a2aCard, err := ToA2ACard(card, "https://example.com/a2a")
 	if err != nil {
 		t.Fatalf("ToA2ACard() error = %v", err)
 	}
-	if a2aCard.Version != card.Version {
-		t.Fatalf("a2a version = %q, want %q", a2aCard.Version, card.Version)
+	if a2aCard.Version != discovery.AgentCardVersion {
+		t.Fatalf("a2a version = %q, want %q", a2aCard.Version, discovery.AgentCardVersion)
 	}
 	if len(a2aCard.Skills) != 2 {
 		t.Fatalf("len(skills) = %d, want 2", len(a2aCard.Skills))
@@ -61,29 +61,39 @@ func TestToA2ACard(t *testing.T) {
 }
 
 func TestAgentCardFromA2A(t *testing.T) {
-	a2aCard := &a2a.AgentCard{
-		SupportedInterfaces: []*a2a.AgentInterface{a2a.NewAgentInterface("https://example.com/a2a", a2a.TransportProtocolJSONRPC)},
-		Capabilities:        a2a.AgentCapabilities{Streaming: true},
+	a2aCard := &a2asdk.AgentCard{
+		SupportedInterfaces: []*a2asdk.AgentInterface{a2asdk.NewAgentInterface("https://example.com/a2a", a2asdk.TransportProtocolJSONRPC)},
+		Capabilities:        a2asdk.AgentCapabilities{Streaming: true},
 		DefaultInputModes:   []string{"application/json"},
 		DefaultOutputModes:  []string{"application/json"},
 		Description:         "test",
 		Name:                "test-agent",
-		Skills: []a2a.AgentSkill{
+		Skills: []a2asdk.AgentSkill{
 			{ID: "inference", Name: "Inference", Description: "run inference", Tags: []string{"sam"}},
 		},
 		Version: "a2a.v1",
 	}
 
-	card, err := protocol.AgentCardFromA2A("12D3KooWQK6Jk5hY5YAL3mVyYBVN1w8w5kZdeMNF8f9mJ5JPgX5R", a2aCard, nil)
+	card, err := AgentCardFromA2A("12D3KooWQK6Jk5hY5YAL3mVyYBVN1w8w5kZdeMNF8f9mJ5JPgX5R", a2aCard, nil)
 	if err != nil {
 		t.Fatalf("AgentCardFromA2A() error = %v", err)
+	}
+	var stored a2asdk.AgentCard
+	if err := card.DecodeProtocolPayload(protocolPayloadName, &stored); err != nil {
+		t.Fatalf("DecodeProtocolPayload() error = %v", err)
+	}
+	if stored.Name != a2aCard.Name {
+		t.Fatalf("stored protocol payload name = %q, want %q", stored.Name, a2aCard.Name)
+	}
+	resources := mcpprotocol.ResourcesFromCard(card)
+	if len(resources) != 0 {
+		t.Fatalf("len(resources) = %d, want 0", len(resources))
 	}
 	capabilities := card.CapabilityNames()
 	if len(capabilities) != 1 || capabilities[0] != "inference" {
 		t.Fatalf("capabilities = %#v, want [inference]", capabilities)
 	}
-	card.IssuedAt = time.Now().UTC()
-	if card.Algorithm != protocol.AgentCardSignAlgo {
-		t.Fatalf("algorithm = %q, want %q", card.Algorithm, protocol.AgentCardSignAlgo)
+	if card.Algorithm != discovery.AgentCardSignAlgo {
+		t.Fatalf("algorithm = %q, want %q", card.Algorithm, discovery.AgentCardSignAlgo)
 	}
 }

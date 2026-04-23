@@ -202,8 +202,8 @@ func runMeshPublisher() error {
 	card, err := protocol.NewAgentCard(
 		node.PeerID(),
 		[]string{meshCapability},
-		[]protocol.MCPResource{{Name: "summarizer", Kind: "tool", Endpoint: "mcp://summarizer"}},
 		priv,
+		mcpprotocol.WithResources([]mcpprotocol.Resource{{Name: "summarizer", Kind: "tool", Endpoint: "mcp://summarizer"}}),
 	)
 	if err != nil {
 		return fmt.Errorf("publisher card creation: %w", err)

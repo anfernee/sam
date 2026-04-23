@@ -114,14 +114,14 @@ func runPublish(parent context.Context, cfg *runConfig) error {
 	if resourceName == "" {
 		resourceName = cfg.capabilities[0]
 	}
-	resource := protocol.MCPResource{
+	resource := mcpprotocol.Resource{
 		Name:        resourceName,
 		Kind:        strings.TrimSpace(cfg.resourceKind),
 		Endpoint:    fmt.Sprintf("http://127.0.0.1:%d", cfg.mcpPort),
 		Description: strings.TrimSpace(cfg.resourceDesc),
 	}
 
-	card, err := protocol.NewAgentCard(node.PeerID(), cfg.capabilities, []protocol.MCPResource{resource}, priv)
+	card, err := protocol.NewAgentCard(node.PeerID(), cfg.capabilities, priv, mcpprotocol.WithResources([]mcpprotocol.Resource{resource}))
 	if err != nil {
 		return fmt.Errorf("building agent card: %w", err)
 	}
@@ -246,14 +246,14 @@ func runPublishDryRunClient(cfg *runConfig) error {
 	if resourceName == "" {
 		resourceName = cfg.capabilities[0]
 	}
-	resource := protocol.MCPResource{
+	resource := mcpprotocol.Resource{
 		Name:        resourceName,
 		Kind:        strings.TrimSpace(cfg.resourceKind),
 		Endpoint:    fmt.Sprintf("http://127.0.0.1:%d", cfg.mcpPort),
 		Description: strings.TrimSpace(cfg.resourceDesc),
 	}
 
-	card, err := protocol.NewAgentCard(peerID, cfg.capabilities, []protocol.MCPResource{resource}, privKey)
+	card, err := protocol.NewAgentCard(peerID, cfg.capabilities, privKey, mcpprotocol.WithResources([]mcpprotocol.Resource{resource}))
 	if err != nil {
 		return fmt.Errorf("building agent card: %w", err)
 	}

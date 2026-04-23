@@ -36,6 +36,7 @@ import (
 	a2aprotocol "sam/pkg/protocol/a2a"
 	protocol "sam/pkg/protocol/discovery"
 	httpprotocol "sam/pkg/protocol/http"
+	mcpprotocol "sam/pkg/protocol/mcp"
 )
 
 func newProxyCmd(cfg *runConfig) *cobra.Command {
@@ -475,7 +476,8 @@ func buildGlobalMCPCatalog(cards []*protocol.AgentCard) []meshToolEntry {
 		if card == nil || strings.TrimSpace(card.PeerID) == "" {
 			continue
 		}
-		for _, res := range card.Resources {
+		resources := mcpprotocol.ResourcesFromCard(card)
+		for _, res := range resources {
 			name := strings.TrimSpace(res.Name)
 			if name == "" {
 				continue
@@ -488,7 +490,7 @@ func buildGlobalMCPCatalog(cards []*protocol.AgentCard) []meshToolEntry {
 				Description: strings.TrimSpace(res.Description),
 			})
 		}
-		if len(card.Resources) > 0 {
+		if len(resources) > 0 {
 			continue
 		}
 		for _, capability := range card.CapabilityNames() {

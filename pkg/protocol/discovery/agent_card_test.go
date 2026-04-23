@@ -18,11 +18,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/peer"
 
 	protocol "sam/pkg/protocol/discovery"
+	mcpprotocol "sam/pkg/protocol/mcp"
 )
 
 func TestAgentCardSignVerify(t *testing.T) {
@@ -38,8 +38,8 @@ func TestAgentCardSignVerify(t *testing.T) {
 	card, err := protocol.NewAgentCard(
 		pid,
 		[]string{"Inference", "search", "search"},
-		[]protocol.MCPResource{{Name: "local-mcp", Kind: "tool", Endpoint: "unix:///tmp/mcp.sock"}},
 		priv,
+		mcpprotocol.WithResources([]mcpprotocol.Resource{{Name: "local-mcp", Kind: "tool", Endpoint: "unix:///tmp/mcp.sock"}}),
 	)
 	if err != nil {
 		t.Fatalf("NewAgentCard() error = %v", err)
@@ -68,16 +68,15 @@ func TestAgentCardVerifyRejectsTamper(t *testing.T) {
 	card, err := protocol.NewAgentCard(
 		pid,
 		[]string{"inference"},
-		nil,
 		priv,
 	)
 	if err != nil {
 		t.Fatalf("NewAgentCard() error = %v", err)
 	}
 
-	card.Skills = append(card.Skills, card.Skills[0])
-	card.Skills[1].ID = "search"
-	card.Skills[1].Name = "search"
+	card.Capabilities = append(card.Capabilities, card.Capabilities[0])
+	card.Capabilities[1].ID = "search"
+	card.Capabilities[1].Name = "search"
 	if err := protocol.VerifyAgentCard(card); err == nil {
 		t.Fatal("VerifyAgentCard() should fail for tampered card")
 	}
@@ -94,11 +93,12 @@ func TestAgentCardVerifyRejectsMissingSignature(t *testing.T) {
 	}
 
 	card := &protocol.AgentCard{
-		AgentCard: a2a.AgentCard{
-			Name:    "sam-agent-" + pid.String(),
-			Skills:  []a2a.AgentSkill{{ID: "inference", Name: "inference"}},
-			Version: protocol.AgentCardVersion,
-		},
+		Version: protocol.AgentCardVersion,
+		Name:    "sam-agent-" + pid.String(),
+		Capabilities: []protocol.Capability{{
+			ID:   "inference",
+			Name: "inference",
+		}},
 		PeerID:    pid.String(),
 		IssuedAt:  time.Now().UTC(),
 		Algorithm: protocol.AgentCardSignAlgo,

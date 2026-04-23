@@ -41,6 +41,7 @@ import (
 	samnet "sam/pkg/net"
 	a2aprotocol "sam/pkg/protocol/a2a"
 	protocol "sam/pkg/protocol/discovery"
+	mcpprotocol "sam/pkg/protocol/mcp"
 )
 
 const (
@@ -239,8 +240,8 @@ func runCallProviderRole() error {
 	card, err := protocol.NewAgentCard(
 		node.PeerID(),
 		[]string{callCapability},
-		[]protocol.MCPResource{{Name: "weather", Kind: "tool", Endpoint: "mcp://weather"}},
 		priv,
+		mcpprotocol.WithResources([]mcpprotocol.Resource{{Name: "weather", Kind: "tool", Endpoint: "mcp://weather"}}),
 	)
 	if err != nil {
 		return fmt.Errorf("provider card creation: %w", err)
@@ -340,7 +341,7 @@ func runCallConsumerRole() error {
 			Nonce:      "nonce-success",
 			Capability: callCapability,
 		},
-		MCPRequest: []byte(`{"jsonrpc":"2.0","id":"sam-call","method":"message","params":{"message":"weather"}}`),
+		Request: []byte(`{"jsonrpc":"2.0","id":"sam-call","method":"message","params":{"message":"weather"}}`),
 	}
 
 	if _, err := a2aprotocol.Execute(ctx, node.Host(), req, observer); err != nil {

@@ -150,10 +150,10 @@ func TestExecuteSuccessRecordsObserver(t *testing.T) {
 		t.Fatalf("SetLocalPassport(client) error = %v", err)
 	}
 	resp, err := Execute(ctx, clientHost, ExecuteRequest{
-		Target:     peer.AddrInfo{ID: serverHost.ID(), Addrs: serverHost.Addrs()},
-		Biscuit:    "test-biscuit",
-		Payment:    economy.Micropayment{Amount: 1, Asset: "sam-credit", Nonce: "n-1"},
-		MCPRequest: []byte(`{"jsonrpc":"2.0","id":"sam-call","method":"message","params":{"message":"ping"}}`),
+		Target:  peer.AddrInfo{ID: serverHost.ID(), Addrs: serverHost.Addrs()},
+		Biscuit: "test-biscuit",
+		Payment: economy.Micropayment{Amount: 1, Asset: "sam-credit", Nonce: "n-1"},
+		Request: []byte(`{"jsonrpc":"2.0","id":"sam-call","method":"message","params":{"message":"ping"}}`),
 	}, clientObserver)
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
@@ -202,10 +202,10 @@ func TestExecuteReturnsLivenessErrorWhenPeerDown(t *testing.T) {
 		t.Fatalf("SetLocalPassport() error = %v", err)
 	}
 	_, err = Execute(ctx, clientHost, ExecuteRequest{
-		Target:     target,
-		Biscuit:    "test-biscuit",
-		Payment:    economy.Micropayment{Amount: 1, Asset: "sam-credit", Nonce: "n-2"},
-		MCPRequest: []byte(`{"jsonrpc":"2.0","id":"sam-call","method":"message","params":{"message":"ping"}}`),
+		Target:  target,
+		Biscuit: "test-biscuit",
+		Payment: economy.Micropayment{Amount: 1, Asset: "sam-credit", Nonce: "n-2"},
+		Request: []byte(`{"jsonrpc":"2.0","id":"sam-call","method":"message","params":{"message":"ping"}}`),
 	}, clientObserver)
 	if err == nil {
 		t.Fatalf("Execute() error = nil, want liveness error")

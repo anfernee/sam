@@ -25,6 +25,7 @@ import (
 	"github.com/spf13/cobra"
 
 	protocol "sam/pkg/protocol/discovery"
+	mcpprotocol "sam/pkg/protocol/mcp"
 )
 
 func newPublishCardCmd(cfg *runConfig) *cobra.Command {
@@ -59,13 +60,13 @@ func runPublishCard(parent context.Context, cfg *runConfig) error {
 		return fmt.Errorf("local node private key unavailable")
 	}
 
-	resource := protocol.MCPResource{
+	resource := mcpprotocol.Resource{
 		Name:        strings.TrimSpace(cfg.resourceName),
 		Kind:        strings.TrimSpace(cfg.resourceKind),
 		Endpoint:    strings.TrimSpace(cfg.resourceEP),
 		Description: strings.TrimSpace(cfg.resourceDesc),
 	}
-	card, err := protocol.NewAgentCard(node.PeerID(), cfg.capabilities, []protocol.MCPResource{resource}, priv)
+	card, err := protocol.NewAgentCard(node.PeerID(), cfg.capabilities, priv, mcpprotocol.WithResources([]mcpprotocol.Resource{resource}))
 	if err != nil {
 		return fmt.Errorf("building agent card: %w", err)
 	}

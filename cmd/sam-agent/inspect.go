@@ -24,6 +24,7 @@ import (
 
 	"sam/pkg/economy"
 	protocol "sam/pkg/protocol/discovery"
+	mcpprotocol "sam/pkg/protocol/mcp"
 )
 
 // newInspectCmd creates the "sam inspect" command for decoding SAM artifacts.
@@ -142,16 +143,17 @@ func runInspectCard(cfg *runConfig, input string) error {
 		fmt.Printf("Algorithm:   %s\n", card.Algorithm)
 		fmt.Printf("Issued At:   %s\n", card.IssuedAt.Format("2006-01-02T15:04:05Z07:00"))
 
-		if len(card.Skills) > 0 {
-			fmt.Println("\nSkills:")
-			for _, skill := range card.Skills {
-				fmt.Printf("  - %s: %s\n", skill.ID, skill.Description)
+		if len(card.Capabilities) > 0 {
+			fmt.Println("\nCapabilities:")
+			for _, capability := range card.Capabilities {
+				fmt.Printf("  - %s: %s\n", capability.ID, capability.Description)
 			}
 		}
 
-		if len(card.Resources) > 0 {
+		resources := mcpprotocol.ResourcesFromCard(&card)
+		if len(resources) > 0 {
 			fmt.Println("\nResources:")
-			for _, res := range card.Resources {
+			for _, res := range resources {
 				fmt.Printf("  - %s (%s): %s\n", res.Name, res.Kind, res.Endpoint)
 			}
 		}

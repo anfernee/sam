@@ -168,8 +168,8 @@ func runProviderRole() error {
 	card, err := protocol.NewAgentCard(
 		node.PeerID(),
 		[]string{capabilityName},
-		[]protocol.MCPResource{{Name: "echo", Kind: "tool", Endpoint: "mcp://echo"}},
 		priv,
+		mcpprotocol.WithResources([]mcpprotocol.Resource{{Name: "echo", Kind: "tool", Endpoint: "mcp://echo"}}),
 	)
 	if err != nil {
 		return fmt.Errorf("provider card creation: %w", err)
