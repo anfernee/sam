@@ -9,7 +9,7 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"sync"
+	"time"
 
 	"github.com/biscuit-auth/biscuit-go/v2"
 	"github.com/coreos/go-oidc/v3/oidc"
@@ -35,8 +35,7 @@ type Hub struct {
 	Verifier   *oidc.IDTokenVerifier
 	BiscuitKey ed25519.PrivateKey
 	MeshID     string
-	Registry   map[peer.ID]string
-	mu         sync.RWMutex
+	gater      *hubConnGate
 }
 
 var (
@@ -51,6 +50,7 @@ var (
 
 // NewHub starts a host supporting both QUIC and TCP (with TLS 1.3)
 func NewHub(ctx context.Context) (*Hub, error) {
+	gater := newHubConnGate()
 	// Multi-transport setup for firewall traversal
 	h, err := libp2p.New(
 		libp2p.Transport(libp2pquic.NewTransport),
@@ -59,6 +59,8 @@ func NewHub(ctx context.Context) (*Hub, error) {
 		// FIPS compliant Security
 		libp2p.Security(libp2ptls.ID, libp2ptls.New),
 		libp2p.EnableRelayService(),
+		libp2p.ConnectionGater(gater),
+		libp2p.EnableNATService(),
 	)
 	if err != nil {
 		return nil, err
@@ -104,7 +106,7 @@ func NewHub(ctx context.Context) (*Hub, error) {
 		Verifier:   provider.Verifier(&oidc.Config{ClientID: clientID}),
 		BiscuitKey: bKey,
 		MeshID:     meshName,
-		Registry:   make(map[peer.ID]string),
+		gater:      gater,
 	}, nil
 }
 
@@ -114,6 +116,7 @@ func (h *Hub) handleLogin(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Missing peer_id", 400)
 		return
 	}
+	// Bind PeerID as the OIDC 'state'
 	url := h.OIDCConfig.AuthCodeURL(pID)
 	http.Redirect(w, r, url, http.StatusFound)
 }
@@ -135,11 +138,16 @@ func (h *Hub) handleCallback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "ID Token verification failed", 401)
 		return
 	}
-
+	// standard claims mapping
 	var claims struct {
-		Email string `json:"email"`
+		Subject string   `json:"sub"`
+		Email   string   `json:"email"`
+		Groups  []string `json:"groups"`
 	}
-	idToken.Claims(&claims)
+	if err := idToken.Claims(&claims); err != nil {
+		http.Error(w, "Failed to parse claims", 500)
+		return
+	}
 
 	p, err := peer.Decode(peerIDStr)
 	if err != nil {
@@ -147,48 +155,72 @@ func (h *Hub) handleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	bToken, err := h.issueBiscuit(p, claims.Email)
+	// Issue the Biscuit using Standard Vocabulary
+	biscuitToken, err := h.issueStandardBiscuit(p, claims.Subject, claims.Email, claims.Groups)
 	if err != nil {
-		http.Error(w, "Failed to issue Biscuit", 500)
+		http.Error(w, "Biscuit issuance failed", 500)
 		return
 	}
 
-	h.mu.Lock()
-	h.Registry[p] = claims.Email
-	h.mu.Unlock()
+	// Unlock the Mesh Firewall for this PeerID
+	h.gater.mu.Lock()
+	h.gater.authenticated[p] = true
+	delete(h.gater.pending, p)
+	h.gater.mu.Unlock()
 
-	fmt.Fprintf(w, "Sovereign Identity Verified!\nUser: %s\nToken: %s", claims.Email, bToken)
+	w.Header().Set("Content-Type", "text/html")
+	fmt.Fprintf(w, `<html><body>
+		<h3>Sovereign Identity Verified!</h3>
+		<p>Peer <code>%s</code> is now part of mesh <code>%s</code></p>
+		<p>Identity: <code>%s</code></p>
+		<hr/>
+		<p>Standard Identity Biscuit:</p>
+		<textarea rows="5" cols="60">%s</textarea>
+	</body></html>`, p, h.MeshID, claims.Email, biscuitToken)
 }
 
-func (h *Hub) issueBiscuit(p peer.ID, email string) (string, error) {
+func (h *Hub) issueStandardBiscuit(p peer.ID, sub string, email string, groups []string) (string, error) {
 	builder := biscuit.NewBuilder(h.BiscuitKey)
 
+	// user_id mapping (sub)
+	builder.AddAuthorityFact(biscuit.Fact{Predicate: biscuit.Predicate{
+		Name: "user_id",
+		IDs:  []biscuit.Term{biscuit.String(sub)},
+	}})
+
+	// user_email mapping (email)
+	builder.AddAuthorityFact(biscuit.Fact{Predicate: biscuit.Predicate{
+		Name: "user_email",
+		IDs:  []biscuit.Term{biscuit.String(email)},
+	}})
+
+	// group mapping (groups)
+	for _, g := range groups {
+		builder.AddAuthorityFact(biscuit.Fact{Predicate: biscuit.Predicate{
+			Name: "group",
+			IDs:  []biscuit.Term{biscuit.String(g)},
+		}})
+	}
+
+	// peer_id mapping (hardware binding)
 	builder.AddAuthorityFact(biscuit.Fact{Predicate: biscuit.Predicate{
 		Name: "peer_id",
 		IDs:  []biscuit.Term{biscuit.String(p.String())},
 	}})
+
+	// mesh_id mapping (namespace)
 	builder.AddAuthorityFact(biscuit.Fact{Predicate: biscuit.Predicate{
 		Name: "mesh_id",
 		IDs:  []biscuit.Term{biscuit.String(h.MeshID)},
-	}})
-	builder.AddAuthorityFact(biscuit.Fact{Predicate: biscuit.Predicate{
-		Name: "external_id",
-		IDs:  []biscuit.Term{biscuit.String(email)},
 	}})
 
 	t, err := builder.Build()
 	if err != nil {
 		return "", err
 	}
-
-	data, err := t.Serialize()
-	if err != nil {
-		return "", err
-	}
-
+	data, _ := t.Serialize()
 	return base64.StdEncoding.EncodeToString(data), nil
 }
-
 func main() {
 	rootCmd := &cobra.Command{
 		Use:   "sam-hub",
@@ -199,6 +231,36 @@ func main() {
 			if err != nil {
 				log.Fatal(err)
 			}
+
+			// Watchdog: Expel peers that connect but never finish OIDC
+			go func() {
+				const timeout = 60 * time.Second
+				ticker := time.NewTicker(10 * time.Second)
+				defer ticker.Stop()
+
+				for {
+					select {
+					case <-ctx.Done():
+						return
+					case <-ticker.C:
+						h.gater.mu.Lock()
+						now := time.Now()
+						for pID, startTime := range h.gater.pending {
+							if now.Sub(startTime) > timeout {
+								log.Printf("GATER: Evicting peer %s (OIDC timeout exceeded)", pID)
+
+								// 1. Physically sever the swarm connection
+								h.Host.Network().ClosePeer(pID)
+
+								// 2. Cleanup gater state
+								delete(h.gater.authenticated, pID)
+								delete(h.gater.pending, pID)
+							}
+						}
+						h.gater.mu.Unlock()
+					}
+				}
+			}()
 
 			mux := http.NewServeMux()
 			mux.HandleFunc("/login", h.handleLogin)
@@ -221,9 +283,6 @@ func main() {
 			fmt.Printf("SAM Hub Online (QUIC + TCP)\n")
 			fmt.Printf("MeshID: %s\n", h.MeshID)
 			fmt.Printf("PeerID: %s\n", h.Host.ID())
-
-			// Still need a port for the Browser to reach the Hub for OIDC redirect
-			log.Fatal(http.ListenAndServe(":8080", mux))
 		},
 	}
 
