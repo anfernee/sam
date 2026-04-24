@@ -17,11 +17,12 @@ package main
 import (
 	"context"
 	"crypto/ed25519"
-	"encoding/json"
 	"fmt"
 
 	"github.com/biscuit-auth/biscuit-go/v2"
+	"github.com/google/sam/api"
 	"github.com/libp2p/go-libp2p"
+	"google.golang.org/protobuf/proto"
 	dht "github.com/libp2p/go-libp2p-kad-dht"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	"github.com/libp2p/go-libp2p/core/crypto"
@@ -38,11 +39,7 @@ import (
 
 const AuthProtocolID = protocol.ID("/sam/auth/1.0.0")
 
-// IdentityExchange is the "Auth Envelope"
-type IdentityExchange struct {
-	Biscuit []byte `json:"biscuit"`
-	Version string `json:"version"`
-}
+
 
 type SamNode struct {
 	Host         host.Host
@@ -124,9 +121,12 @@ func (n *SamNode) listenForHubEvents(ctx context.Context) {
 		if err != nil {
 			return
 		}
-		// In a full implementation, parse the event (e.g. {"action": "LEFT", "peer": "Qm..."})
-		// and verify the Hub's signature on the payload to prevent forged kicks.
-		fmt.Printf("[Mesh Event] Received Hub update from %s\n", msg.ReceivedFrom)
+		var revMsg api.RevocationMsg
+		if err := proto.Unmarshal(msg.Data, &revMsg); err != nil {
+			fmt.Printf("[Mesh Event] Failed to unmarshal revocation message from %s: %v\n", msg.ReceivedFrom, err)
+			continue
+		}
+		fmt.Printf("[Mesh Event] Received Hub update from %s for target %s\n", msg.ReceivedFrom, revMsg.TargetPeerId)
 	}
 }
 
@@ -148,9 +148,9 @@ func (n *SamNode) HandleAuthHandshake(s network.Stream) {
 	}
 	defer reader.ReleaseMsg(msg)
 
-	var exchange IdentityExchange
-	if err := json.Unmarshal(msg, &exchange); err != nil {
-		fmt.Printf("[AuthN] Invalid JSON from %s\n", remotePeer)
+	var exchange api.AuthEnvelope
+	if err := proto.Unmarshal(msg, &exchange); err != nil {
+		fmt.Printf("[AuthN] Invalid protobuf from %s\n", remotePeer)
 		return
 	}
 

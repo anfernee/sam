@@ -18,15 +18,16 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 	"strings"
 
 	"github.com/biscuit-auth/biscuit-go/v2"
+	"github.com/google/sam/api"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"google.golang.org/protobuf/encoding/protojson"
 )
 
 // authMiddleware protects HTTP endpoints by requiring a valid Hub-issued Biscuit
@@ -150,14 +151,19 @@ func (h *Hub) handleConfig(w http.ResponseWriter, r *http.Request) {
 
 	pubKey := h.BiscuitKey.Public().(ed25519.PublicKey)
 
-	config := map[string]interface{}{
-		"public_key":      hex.EncodeToString(pubKey),
-		"mesh_id":         h.MeshID,
-		"bootstrap_nodes": addrStrs,
+	config := &api.HubConfig{
+		PublicKeyHex:   hex.EncodeToString(pubKey),
+		MeshId:         h.MeshID,
+		BootstrapNodes: addrStrs,
+	}
+	b, err := protojson.Marshal(config)
+	if err != nil {
+		http.Error(w, "Failed to marshal config", http.StatusInternalServerError)
+		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(config); err != nil {
-		log.Printf("encoding config response: %v", err)
+	if _, err := w.Write(b); err != nil {
+		log.Printf("writing config response: %v", err)
 	}
 }
 
@@ -171,10 +177,19 @@ func (h *Hub) handlePeers(w http.ResponseWriter, r *http.Request) {
 		peers = append(peers, pID.String())
 	}
 
+	registry := &api.PeerRegistry{
+		Peers: make(map[string]*api.PeerProfile),
+	}
+	for _, pID := range peers {
+		registry.Peers[pID] = &api.PeerProfile{}
+	}
+	b, err := protojson.Marshal(registry)
+	if err != nil {
+		http.Error(w, "Failed to marshal peers", http.StatusInternalServerError)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(map[string]interface{}{
-		"enrolled_peers": peers,
-	}); err != nil {
-		log.Printf("encoding peers response: %v", err)
+	if _, err := w.Write(b); err != nil {
+		log.Printf("writing peers response: %v", err)
 	}
 }

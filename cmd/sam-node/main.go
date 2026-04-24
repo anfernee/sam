@@ -17,17 +17,13 @@ package main
 import (
 	"bufio"
 	"context"
-	"crypto/ed25519"
-	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"log"
-	"net/http"
 	"os"
 	"strings"
 
+	"github.com/google/sam/api"
 	"github.com/libp2p/go-libp2p/core/crypto"
-	"github.com/multiformats/go-multiaddr"
 	"github.com/spf13/cobra"
 )
 
@@ -37,63 +33,6 @@ var (
 	tokenFlag   string
 )
 
-type hubConfigResponse struct {
-	PublicKey      string   `json:"public_key"`
-	MeshID         string   `json:"mesh_id"`
-	BootstrapNodes []string `json:"bootstrap_nodes"`
-}
-
-func fetchHubConfig(ctx context.Context, hubBaseURL string) (ed25519.PublicKey, []multiaddr.Multiaddr, error) {
-	configURL := strings.TrimRight(hubBaseURL, "/") + "/api/v1/config"
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, configURL, nil)
-	if err != nil {
-		return nil, nil, fmt.Errorf("creating hub config request: %w", err)
-	}
-
-	resp, err := (&http.Client{}).Do(req)
-	if err != nil {
-		return nil, nil, fmt.Errorf("requesting hub config: %w", err)
-	}
-	defer func() {
-		_ = resp.Body.Close()
-	}()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, nil, fmt.Errorf("hub config returned status %d", resp.StatusCode)
-	}
-
-	var cfg hubConfigResponse
-	if err := json.NewDecoder(resp.Body).Decode(&cfg); err != nil {
-		return nil, nil, fmt.Errorf("decoding hub config response: %w", err)
-	}
-
-	pubBytes, err := hex.DecodeString(strings.TrimSpace(cfg.PublicKey))
-	if err != nil {
-		return nil, nil, fmt.Errorf("decoding hub public key: %w", err)
-	}
-	if len(pubBytes) != ed25519.PublicKeySize {
-		return nil, nil, fmt.Errorf("invalid hub public key length: %d", len(pubBytes))
-	}
-
-	var hubAddrs []multiaddr.Multiaddr
-	for _, raw := range cfg.BootstrapNodes {
-		raw = strings.TrimSpace(raw)
-		if raw == "" {
-			continue
-		}
-		ma, err := multiaddr.NewMultiaddr(raw)
-		if err != nil {
-			log.Printf("ignoring invalid bootstrap multiaddr %q: %v", raw, err)
-			continue
-		}
-		hubAddrs = append(hubAddrs, ma)
-	}
-	if len(hubAddrs) == 0 {
-		return nil, nil, fmt.Errorf("hub config did not provide valid bootstrap addresses")
-	}
-
-	return ed25519.PublicKey(pubBytes), hubAddrs, nil
-}
 
 func main() {
 	rootCmd := &cobra.Command{
@@ -121,7 +60,7 @@ func main() {
 				}
 			}()
 
-			hubPubKey, hubAddrs, err := fetchHubConfig(context.Background(), hubAddr)
+			hubPubKey, hubAddrs, err := api.FetchConfig(context.Background(), hubAddr)
 			if err != nil {
 				log.Fatalf("Failed to fetch hub config: %v", err)
 			}
@@ -193,7 +132,7 @@ func main() {
 				return
 			}
 
-			hubPubKey, hubAddrs, err := fetchHubConfig(context.Background(), hubAddr)
+			hubPubKey, hubAddrs, err := api.FetchConfig(context.Background(), hubAddr)
 			if err != nil {
 				log.Fatalf("Failed to fetch hub config: %v", err)
 			}

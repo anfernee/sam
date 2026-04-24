@@ -113,7 +113,7 @@ func startMockHubConfigServer(t *testing.T) string {
 		case "/api/v1/config":
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(map[string]any{
-				"public_key":      hex.EncodeToString(pubKey),
+				"public_key_hex":  hex.EncodeToString(pubKey),
 				"mesh_id":         "test-mesh",
 				"bootstrap_nodes": []string{bootstrapAddr},
 			})

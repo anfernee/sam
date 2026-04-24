@@ -9,6 +9,10 @@ build:
 	go build -v -o "$(OUT_DIR)/sam-node" ./cmd/sam-node
 	go build -v -o "$(OUT_DIR)/sam-hub" ./cmd/sam-hub
 
+.PHONY: proto
+proto:
+	./hack/gen-proto.sh
+
 clean:
 	rm -rf "$(OUT_DIR)/"
 
