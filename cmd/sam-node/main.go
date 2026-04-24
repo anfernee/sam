@@ -33,7 +33,6 @@ var (
 	tokenFlag   string
 )
 
-
 func main() {
 	rootCmd := &cobra.Command{
 		Use:   "sam-node",
@@ -62,7 +61,10 @@ func main() {
 
 			hubPubKey, hubAddrs, err := api.FetchConfig(context.Background(), hubAddr)
 			if err != nil {
-				log.Fatalf("Failed to fetch hub config: %v", err)
+				log.Printf("Failed to fetch hub config from %s: %v", hubAddr, err)
+				fmt.Println("\n💡 Tip: If you don't have a private hub running, you can try the public community mesh:")
+				fmt.Printf("   sam-node login --hub https://community.sam-mesh.dev\n\n")
+				log.Fatalf("Critical: Cannot proceed without a valid hub.")
 			}
 
 			priv := getOrGenerateKey(store)
@@ -134,7 +136,10 @@ func main() {
 
 			hubPubKey, hubAddrs, err := api.FetchConfig(context.Background(), hubAddr)
 			if err != nil {
-				log.Fatalf("Failed to fetch hub config: %v", err)
+				log.Printf("Failed to fetch hub config from %s: %v", hubAddr, err)
+				fmt.Println("\n💡 Tip: If you don't have a private hub running, you can try the public community mesh:")
+				fmt.Printf("   sam-node run --hub https://community.sam-mesh.dev\n\n")
+				log.Fatalf("Critical: Cannot proceed without a valid hub.")
 			}
 
 			priv := getOrGenerateKey(store)
@@ -156,7 +161,7 @@ func main() {
 	// Configure Flags
 	runCmd.Flags().StringVar(&tokenFlag, "token", os.Getenv("SAM_NODE_TOKEN"), "Manual Identity Biscuit (overrides store)")
 	runCmd.Flags().StringSliceVar(&listenAddrs, "listen", []string{"/ip4/0.0.0.0/udp/5001/quic-v1", "/ip4/0.0.0.0/tcp/5002"}, "libp2p Listen Addrs")
-	rootCmd.PersistentFlags().StringVar(&hubAddr, "hub", "http://localhost:8080", "Hub URL (Default: app.sam-dev)")
+	rootCmd.PersistentFlags().StringVar(&hubAddr, "hub", "http://localhost:8080", "Hub URL")
 
 	rootCmd.AddCommand(loginCmd, runCmd)
 	if err := rootCmd.Execute(); err != nil {
