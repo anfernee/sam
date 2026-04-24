@@ -1,10 +1,26 @@
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 
+	"github.com/libp2p/go-libp2p/core/peer"
 	"go.etcd.io/bbolt"
 )
 
@@ -38,7 +54,15 @@ func NewStore(dir string) (*Store, error) {
 	}
 
 	err = db.Update(func(tx *bbolt.Tx) error {
-		_, _ = tx.CreateBucketIfNotExists([]byte(bucketIdentity))
+		if _, err := tx.CreateBucketIfNotExists([]byte(bucketIdentity)); err != nil {
+			return err
+		}
+		if _, err := tx.CreateBucketIfNotExists([]byte(bucketVerifiedPeers)); err != nil {
+			return err
+		}
+		if _, err := tx.CreateBucketIfNotExists([]byte(bucketBannedPeers)); err != nil {
+			return err
+		}
 		return nil
 	})
 
@@ -84,4 +108,65 @@ func (s *Store) LoadKey() ([]byte, error) {
 
 func (s *Store) Close() error {
 	return s.db.Close()
+}
+
+const (
+	bucketVerifiedPeers = "verified_peers"
+	bucketBannedPeers   = "banned_peers"
+)
+
+// VerifiedIdentity is the "Visitor Badge" saved after Layer 3
+type VerifiedIdentity struct {
+	NodeID     string `json:"node"`
+	UserID     string `json:"user"`
+	UserEmail  string `json:"email"`
+	MeshID     string `json:"namespace"`
+	RawBiscuit []byte `json:"raw_biscuit"`
+}
+
+// IsBanned checks local store to see if this peer is banned.
+func (s *Store) IsBanned(p peer.ID) bool {
+	var banned bool
+	_ = s.db.View(func(tx *bbolt.Tx) error {
+		b := tx.Bucket([]byte(bucketBannedPeers))
+		if b == nil {
+			return nil
+		}
+		if b.Get([]byte(p.String())) != nil {
+			banned = true
+		}
+		return nil
+	})
+	return banned
+}
+
+func (s *Store) SaveVerifiedIdentity(p peer.ID, identity VerifiedIdentity) error {
+	return s.db.Update(func(tx *bbolt.Tx) error {
+		b := tx.Bucket([]byte(bucketVerifiedPeers))
+		if b == nil {
+			var err error
+			b, err = tx.CreateBucketIfNotExists([]byte(bucketVerifiedPeers))
+			if err != nil {
+				return err
+			}
+		}
+		data, _ := json.Marshal(identity)
+		return b.Put([]byte(p.String()), data)
+	})
+}
+
+func (s *Store) GetVerifiedIdentity(p peer.ID) (*VerifiedIdentity, error) {
+	var identity VerifiedIdentity
+	err := s.db.View(func(tx *bbolt.Tx) error {
+		b := tx.Bucket([]byte(bucketVerifiedPeers))
+		if b == nil {
+			return fmt.Errorf("peer auth store is not initialized")
+		}
+		data := b.Get([]byte(p.String()))
+		if data == nil {
+			return fmt.Errorf("peer not authenticated")
+		}
+		return json.Unmarshal(data, &identity)
+	})
+	return &identity, err
 }

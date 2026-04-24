@@ -25,6 +25,7 @@ import (
 
 func TestSamNodeRunWithManualTokenStarts(t *testing.T) {
 	nodeBin := buildBinary(t, "./cmd/sam-node")
+	hubURL := startMockHubConfigServer(t)
 	tmpHome := t.TempDir()
 	env := append(os.Environ(),
 		"HOME="+tmpHome,
@@ -39,6 +40,7 @@ func TestSamNodeRunWithManualTokenStarts(t *testing.T) {
 		"",
 		nodeBin,
 		"run",
+		"--hub", hubURL,
 		"--token", "test-token",
 		"--listen", "/ip4/127.0.0.1/udp/0/quic-v1",
 		"--listen", "/ip4/127.0.0.1/tcp/0",

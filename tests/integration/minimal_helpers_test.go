@@ -17,12 +17,21 @@ package integration_test
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"testing"
 	"time"
+
+	corecrypto "github.com/libp2p/go-libp2p/core/crypto"
+	"github.com/libp2p/go-libp2p/core/peer"
 )
 
 func repoRoot(t *testing.T) string {
@@ -79,4 +88,39 @@ func runCommand(
 		return stdout.String(), stderr.String(), context.DeadlineExceeded
 	}
 	return stdout.String(), stderr.String(), err
+}
+
+func startMockHubConfigServer(t *testing.T) string {
+	t.Helper()
+
+	pubKey, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generating hub public key: %v", err)
+	}
+
+	bootstrapPriv, _, err := corecrypto.GenerateEd25519Key(rand.Reader)
+	if err != nil {
+		t.Fatalf("generating bootstrap key: %v", err)
+	}
+	bootstrapPeerID, err := peer.IDFromPrivateKey(bootstrapPriv)
+	if err != nil {
+		t.Fatalf("deriving bootstrap peer id: %v", err)
+	}
+	bootstrapAddr := "/ip4/127.0.0.1/tcp/4002/p2p/" + bootstrapPeerID.String()
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/config":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"public_key":      hex.EncodeToString(pubKey),
+				"mesh_id":         "test-mesh",
+				"bootstrap_nodes": []string{bootstrapAddr},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(ts.Close)
+	return ts.URL
 }

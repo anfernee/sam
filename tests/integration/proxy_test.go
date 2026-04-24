@@ -25,6 +25,7 @@ import (
 
 func TestSamNodeLoginThenRunWithStoredIdentity(t *testing.T) {
 	nodeBin := buildBinary(t, "./cmd/sam-node")
+	hubURL := startMockHubConfigServer(t)
 	tmpHome := t.TempDir()
 	env := append(os.Environ(),
 		"HOME="+tmpHome,
@@ -39,6 +40,7 @@ func TestSamNodeLoginThenRunWithStoredIdentity(t *testing.T) {
 		"test-biscuit-token\n",
 		nodeBin,
 		"login",
+		"--hub", hubURL,
 	)
 	if err != nil {
 		t.Fatalf("sam-node login failed: %v\nstdout:\n%s\nstderr:\n%s", err, loginOut, loginErrOut)
@@ -55,6 +57,7 @@ func TestSamNodeLoginThenRunWithStoredIdentity(t *testing.T) {
 		"",
 		nodeBin,
 		"run",
+		"--hub", hubURL,
 		"--listen", "/ip4/127.0.0.1/udp/0/quic-v1",
 		"--listen", "/ip4/127.0.0.1/tcp/0",
 	)

@@ -1,3 +1,17 @@
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package main
 
 import (
@@ -41,6 +55,7 @@ var (
 	listenAddrs  []string
 	meshName     string
 	publicAddr   string
+	httpAddr     string // Mandatory HTTP listener flag
 )
 
 // Hub handles identity bridging and network discovery
@@ -129,77 +144,6 @@ func NewHub(ctx context.Context) (*Hub, error) {
 	return hub, nil
 }
 
-func (h *Hub) handleLogin(w http.ResponseWriter, r *http.Request) {
-	pID := r.URL.Query().Get("peer_id")
-	if pID == "" {
-		http.Error(w, "Missing peer_id", 400)
-		return
-	}
-	// Bind PeerID as the OIDC 'state'
-	url := h.OIDCConfig.AuthCodeURL(pID)
-	http.Redirect(w, r, url, http.StatusFound)
-}
-
-func (h *Hub) handleCallback(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	peerIDStr := r.URL.Query().Get("state")
-	code := r.URL.Query().Get("code")
-
-	token, err := h.OIDCConfig.Exchange(ctx, code)
-	if err != nil {
-		http.Error(w, "Token exchange failed", 500)
-		return
-	}
-
-	rawID, _ := token.Extra("id_token").(string)
-	idToken, err := h.Verifier.Verify(ctx, rawID)
-	if err != nil {
-		http.Error(w, "ID Token verification failed", http.StatusUnauthorized)
-		return
-	}
-	// standard claims mapping
-	var claims struct {
-		Subject string   `json:"sub"`
-		Email   string   `json:"email"`
-		Groups  []string `json:"groups"`
-	}
-	if err := idToken.Claims(&claims); err != nil {
-		http.Error(w, "Failed to parse claims", 500)
-		return
-	}
-
-	p, err := peer.Decode(peerIDStr)
-	if err != nil {
-		http.Error(w, "Invalid peer_id", 400)
-		return
-	}
-
-	// Issue the Biscuit using Standard Vocabulary
-	biscuitToken, err := h.issueStandardBiscuit(p, claims.Subject, claims.Email, claims.Groups)
-	if err != nil {
-		http.Error(w, "Biscuit issuance failed", 500)
-		return
-	}
-
-	// Unlock the Mesh Firewall for this PeerID
-	h.gater.mu.Lock()
-	h.gater.authenticated[p] = true
-	delete(h.gater.pending, p)
-	h.gater.mu.Unlock()
-
-	w.Header().Set("Content-Type", "text/html")
-	if _, err := fmt.Fprintf(w, `<html><body>
-		<h3>Sovereign Identity Verified!</h3>
-		<p>Peer <code>%s</code> is now part of mesh <code>%s</code></p>
-		<p>Identity: <code>%s</code></p>
-		<hr/>
-		<p>Standard Identity Biscuit:</p>
-		<textarea rows="5" cols="60">%s</textarea>
-	</body></html>`, p, h.MeshID, claims.Email, biscuitToken); err != nil {
-		log.Printf("writing callback response: %v", err)
-	}
-}
-
 // issueStandardBiscuit creates a biscuit with standard facts for user, email, groups, and hardware binding (peer ID).
 func (h *Hub) issueStandardBiscuit(p peer.ID, sub string, email string, groups []string) (string, error) {
 	builder := biscuit.NewBuilder(h.BiscuitKey)
@@ -257,6 +201,8 @@ func (h *Hub) issueStandardBiscuit(p peer.ID, sub string, email string, groups [
 	return base64.StdEncoding.EncodeToString(data), nil
 }
 
+// startWatchdog periodically checks for peers that have connected but not completed OIDC
+// authentication within the grace period, and evicts them from the network.
 func (h *Hub) startWatchdog() {
 	go func() {
 		ticker := time.NewTicker(10 * time.Second)
@@ -292,8 +238,12 @@ func main() {
 			h.startWatchdog()
 
 			mux := http.NewServeMux()
+			// OIDC Endpoints
 			mux.HandleFunc("/login", h.handleLogin)
 			mux.HandleFunc("/callback", h.handleCallback)
+			// API endpoints for agents to fetch config and peer registry
+			mux.HandleFunc("/api/v1/config", h.handleConfig)
+			mux.HandleFunc("/api/v1/peers", h.authMiddleware(h.handlePeers))
 
 			// Corrected libp2phttp Serve logic
 			// This allows agents to reach OIDC via libp2p streams
@@ -306,6 +256,7 @@ func main() {
 					log.Printf("closing p2p listener: %v", err)
 				}
 			}()
+			// Serve the HTTP handler over libp2p streams
 			go func() {
 				server := &http.Server{
 					Handler: mux,
@@ -318,7 +269,10 @@ func main() {
 			fmt.Printf("SAM Hub Online (QUIC + TCP)\n")
 			fmt.Printf("MeshID: %s\n", h.MeshID)
 			fmt.Printf("PeerID: %s\n", h.Host.ID())
-			select {}
+
+			// Standard HTTP server for browser-based OIDC and config API
+			fmt.Printf("Starting Standard HTTP Frontend on %s\n", httpAddr)
+			log.Fatal(http.ListenAndServe(httpAddr, mux))
 		},
 	}
 
@@ -329,6 +283,7 @@ func main() {
 	rootCmd.Flags().StringSliceVar(&listenAddrs, "listen", []string{"/ip4/0.0.0.0/udp/4001/quic-v1", "/ip4/0.0.0.0/tcp/4002"}, "libp2p Listen Addrs")
 	rootCmd.Flags().StringVar(&meshName, "mesh", "public-mesh", "Mesh federation name")
 	rootCmd.Flags().StringVar(&publicAddr, "public-url", "http://localhost:8080", "Public URL for browser OIDC")
+	rootCmd.Flags().StringVar(&httpAddr, "http-listen", ":8080", "Standard HTTP listen address for OIDC and Config")
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)

@@ -1,11 +1,26 @@
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package main
 
 import (
 	"context"
+	"crypto/ed25519"
 	"encoding/json"
 	"fmt"
-	"sync"
 
+	"github.com/biscuit-auth/biscuit-go/v2"
 	"github.com/libp2p/go-libp2p"
 	dht "github.com/libp2p/go-libp2p-kad-dht"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
@@ -17,110 +32,175 @@ import (
 	libp2ptls "github.com/libp2p/go-libp2p/p2p/security/tls"
 	libp2pquic "github.com/libp2p/go-libp2p/p2p/transport/quic"
 	"github.com/libp2p/go-libp2p/p2p/transport/tcp"
+	"github.com/libp2p/go-msgio"
+	"github.com/multiformats/go-multiaddr"
 )
 
-const AuthProtocol = protocol.ID("/sam/auth/1.0.0")
+const AuthProtocolID = protocol.ID("/sam/auth/1.0.0")
+
+// IdentityExchange is the "Auth Envelope"
+type IdentityExchange struct {
+	Biscuit []byte `json:"biscuit"`
+	Version string `json:"version"`
+}
 
 type SamNode struct {
 	Host         host.Host
 	DHT          *dht.IpfsDHT
 	PubSub       *pubsub.PubSub
 	Store        *Store
-	TrustedPeers map[peer.ID]bool
-	mu           sync.RWMutex
+	HubPublicKey ed25519.PublicKey
 }
 
-// NewSamNode initializes a FIPS-compliant libp2p host
-func NewSamNode(ctx context.Context, priv crypto.PrivKey, listenAddrs []string) (*SamNode, error) {
+// NewSamNode creates a new Agent instance secured with the 4-layer pipeline.
+func NewSamNode(ctx context.Context, privKey crypto.PrivKey, hubPubKey ed25519.PublicKey, hubAddrs []multiaddr.Multiaddr, store *Store) (*SamNode, error) {
+	node := &SamNode{
+		Store:        store,
+		HubPublicKey: hubPubKey,
+	}
+
+	// Layer 2: Attach the Bouncer (Gater)
+	gater := &nodeConnGate{node: node}
+
+	// Layer 1: Establish FIPS-compliant Transports
 	h, err := libp2p.New(
-		libp2p.Identity(priv),
-		libp2p.ListenAddrStrings(listenAddrs...),
-		libp2p.Transport(libp2pquic.NewTransport),    // Preferred (UDP/QUIC)
-		libp2p.Transport(tcp.NewTCPTransport),        // Fallback (TCP)
-		libp2p.Security(libp2ptls.ID, libp2ptls.New), // FIPS Compliant TLS 1.3
+		libp2p.Identity(privKey),
+		libp2p.Transport(libp2pquic.NewTransport),
+		libp2p.Transport(tcp.NewTCPTransport),
+		libp2p.Security(libp2ptls.ID, libp2ptls.New),
+		libp2p.ConnectionGater(gater),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create libp2p host: %w", err)
+		return nil, err
 	}
+	node.Host = h
 
-	return &SamNode{
-		Host:         h,
-		TrustedPeers: make(map[peer.ID]bool),
-	}, nil
-}
+	// Initialize Rendezvous (DHT Client)
+	kdht, err := dht.New(ctx, h, dht.Mode(dht.ModeClient))
+	if err != nil {
+		return nil, err
+	}
+	node.DHT = kdht
 
-// SecureStreamHandler implements the "Reject by Default" middleware
-func (n *SamNode) SecureStreamHandler(pid protocol.ID, handler network.StreamHandler) {
-	n.Host.SetStreamHandler(pid, func(s network.Stream) {
-		n.mu.RLock()
-		isTrusted := n.TrustedPeers[s.Conn().RemotePeer()]
-		n.mu.RUnlock()
-
-		if !isTrusted {
-			// DROP: Peer has not completed the /sam/auth/1.0.0 handshake
-			fmt.Printf("Blocked unauthorized stream request for %s from %s\n", pid, s.Conn().RemotePeer())
-			if err := s.Reset(); err != nil {
-				fmt.Printf("Failed to reset unauthorized stream: %v\n", err)
+	// Bootstrap: Connect to the Hub
+	for _, addr := range hubAddrs {
+		addrInfo, _ := peer.AddrInfoFromP2pAddr(addr)
+		if addrInfo != nil {
+			if err := h.Connect(ctx, *addrInfo); err != nil {
+				fmt.Printf("Warning: Failed to bootstrap to hub %s: %v\n", addr, err)
 			}
-			return
 		}
+	}
 
-		handler(s)
-	})
+	// Initialize Gossipsub for Hub Events
+	ps, err := pubsub.NewGossipSub(ctx, h)
+	if err != nil {
+		return nil, err
+	}
+	node.PubSub = ps
+
+	// Listen for Network Evictions/Revocations from the Hub
+	go node.listenForHubEvents(ctx)
+
+	// Layer 3: Open the Lobby Door (Auth Protocol is bypassed by Layer 4)
+	node.WrapSecurely(AuthProtocolID, node.HandleAuthHandshake)
+
+	return node, nil
 }
 
-func (n *SamNode) ListenForMeshEvents(ctx context.Context) error {
-	ps, err := pubsub.NewGossipSub(ctx, n.Host)
+// listenForHubEvents listens to the topic established by the Hub
+func (n *SamNode) listenForHubEvents(ctx context.Context) {
+	topic, err := n.PubSub.Join("sam/mesh/events/v1")
 	if err != nil {
-		return err
+		return
 	}
-	topic, err := ps.Join("sam/mesh/events/v1")
-	if err != nil {
-		return err
-	}
-	n.PubSub = ps
 	sub, err := topic.Subscribe()
 	if err != nil {
-		return err
+		return
 	}
 
-	go func() {
-		for {
-			msg, err := sub.Next(ctx)
-			if err != nil {
-				return
-			}
-			var ev struct {
-				PeerID peer.ID `json:"peer_id"`
-				Action string  `json:"action"` // "LEFT", "BANNED"
-			}
-			if err := json.Unmarshal(msg.Data, &ev); err == nil {
-				if ev.Action == "LEFT" || ev.Action == "BANNED" {
-					n.mu.Lock()
-					delete(n.TrustedPeers, ev.PeerID)
-					n.mu.Unlock()
-					fmt.Printf("[Mesh] Evicting peer %s based on Hub gossip\n", ev.PeerID)
-				}
-			}
+	for {
+		msg, err := sub.Next(ctx)
+		if err != nil {
+			return
 		}
-	}()
-	return nil
+		// In a full implementation, parse the event (e.g. {"action": "LEFT", "peer": "Qm..."})
+		// and verify the Hub's signature on the payload to prevent forged kicks.
+		fmt.Printf("[Mesh Event] Received Hub update from %s\n", msg.ReceivedFrom)
+	}
 }
 
-// HandleAuthHandshake handles incoming Identity Biscuits
+// HandleAuthHandshake is the core libp2p stream handler for /sam/auth/1.0.0.
+// This is the "Admission Office" of the mesh node.
 func (n *SamNode) HandleAuthHandshake(s network.Stream) {
 	defer func() {
 		if err := s.Close(); err != nil {
 			fmt.Printf("Failed to close auth stream: %v\n", err)
 		}
 	}()
+	remotePeer := s.Conn().RemotePeer()
 
-	// MVP: Logic to read Biscuit from stream, verify against Hub Public Key,
-	// and ensure it is bound to the connecting PeerID.
+	reader := msgio.NewVarintReaderSize(s, 1024*64)
+	msg, err := reader.ReadMsg()
+	if err != nil {
+		fmt.Printf("[AuthN] Failed to read handshake from %s: %v\n", remotePeer, err)
+		return
+	}
+	defer reader.ReleaseMsg(msg)
 
-	n.mu.Lock()
-	n.TrustedPeers[s.Conn().RemotePeer()] = true
-	n.mu.Unlock()
+	var exchange IdentityExchange
+	if err := json.Unmarshal(msg, &exchange); err != nil {
+		fmt.Printf("[AuthN] Invalid JSON from %s\n", remotePeer)
+		return
+	}
 
-	fmt.Printf("Peer %s authenticated successfully via Biscuit\n", s.Conn().RemotePeer())
+	// 2. Unmarshal and verify token format
+	b, err := biscuit.Unmarshal(exchange.Biscuit)
+	if err != nil {
+		fmt.Printf("[AuthN] Malformed biscuit from %s\n", remotePeer)
+		return
+	}
+
+	// 3. Verify signature chain against the trusted Hub key.
+	authorizer, err := b.Authorizer(n.HubPublicKey)
+	if err != nil {
+		fmt.Printf("[AuthN] Signature verification setup failed for %s: %v\n", remotePeer, err)
+		return
+	}
+	if err := authorizer.Authorize(); err != nil {
+		fmt.Printf("[AuthN] Authorization failed for %s: %v\n", remotePeer, err)
+		return
+	}
+
+	// 4. Enforce hardware binding: token must include node(<remotePeerID>)
+	boundFact := biscuit.Fact{Predicate: biscuit.Predicate{
+		Name: "node",
+		IDs:  []biscuit.Term{biscuit.String(remotePeer.String())},
+	}}
+	if _, err := b.GetBlockID(boundFact); err != nil {
+		fmt.Printf("[AuthN] Token is not bound to peer %s\n", remotePeer)
+		return
+	}
+
+	// Query for the standard facts we mapped in the Hub
+	// user_id, user_email, group, mesh_id
+	// Note: We use the authorizer to extract these values from the Datalog state
+	identity := VerifiedIdentity{
+		RawBiscuit: exchange.Biscuit,
+		// In a full implementation, you would use authorizer.Query()
+		// to extract specific strings like user_id and group.
+		NodeID:    remotePeer.String(), // Placeholder for Datalog query result
+		UserID:    "extracted_id",      // Placeholder for Datalog query result
+		UserEmail: "extracted_email",   // Placeholder for Datalog query result
+		MeshID:    "extracted_mesh",    // Placeholder for Datalog query result
+	}
+
+	// 5. Save to the persistent session cache (BoltDB)
+	// Once saved here, the ConnectionGater and Middleware will "recognize" this peer.
+	if err := n.Store.SaveVerifiedIdentity(remotePeer, identity); err != nil {
+		fmt.Printf("[AuthN] Store error for %s: %v\n", remotePeer, err)
+		return
+	}
+
+	fmt.Printf("[AuthN] Successfully authenticated peer %s (%s)\n", remotePeer, identity.UserEmail)
 }

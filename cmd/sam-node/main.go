@@ -1,14 +1,33 @@
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package main
 
 import (
 	"bufio"
 	"context"
+	"crypto/ed25519"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"strings"
 
 	"github.com/libp2p/go-libp2p/core/crypto"
+	"github.com/multiformats/go-multiaddr"
 	"github.com/spf13/cobra"
 )
 
@@ -17,6 +36,64 @@ var (
 	listenAddrs []string
 	tokenFlag   string
 )
+
+type hubConfigResponse struct {
+	PublicKey      string   `json:"public_key"`
+	MeshID         string   `json:"mesh_id"`
+	BootstrapNodes []string `json:"bootstrap_nodes"`
+}
+
+func fetchHubConfig(ctx context.Context, hubBaseURL string) (ed25519.PublicKey, []multiaddr.Multiaddr, error) {
+	configURL := strings.TrimRight(hubBaseURL, "/") + "/api/v1/config"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, configURL, nil)
+	if err != nil {
+		return nil, nil, fmt.Errorf("creating hub config request: %w", err)
+	}
+
+	resp, err := (&http.Client{}).Do(req)
+	if err != nil {
+		return nil, nil, fmt.Errorf("requesting hub config: %w", err)
+	}
+	defer func() {
+		_ = resp.Body.Close()
+	}()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, nil, fmt.Errorf("hub config returned status %d", resp.StatusCode)
+	}
+
+	var cfg hubConfigResponse
+	if err := json.NewDecoder(resp.Body).Decode(&cfg); err != nil {
+		return nil, nil, fmt.Errorf("decoding hub config response: %w", err)
+	}
+
+	pubBytes, err := hex.DecodeString(strings.TrimSpace(cfg.PublicKey))
+	if err != nil {
+		return nil, nil, fmt.Errorf("decoding hub public key: %w", err)
+	}
+	if len(pubBytes) != ed25519.PublicKeySize {
+		return nil, nil, fmt.Errorf("invalid hub public key length: %d", len(pubBytes))
+	}
+
+	var hubAddrs []multiaddr.Multiaddr
+	for _, raw := range cfg.BootstrapNodes {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			continue
+		}
+		ma, err := multiaddr.NewMultiaddr(raw)
+		if err != nil {
+			log.Printf("ignoring invalid bootstrap multiaddr %q: %v", raw, err)
+			continue
+		}
+		hubAddrs = append(hubAddrs, ma)
+	}
+	if len(hubAddrs) == 0 {
+		return nil, nil, fmt.Errorf("hub config did not provide valid bootstrap addresses")
+	}
+
+	return ed25519.PublicKey(pubBytes), hubAddrs, nil
+}
 
 func main() {
 	rootCmd := &cobra.Command{
@@ -44,12 +121,22 @@ func main() {
 				}
 			}()
 
+			hubPubKey, hubAddrs, err := fetchHubConfig(context.Background(), hubAddr)
+			if err != nil {
+				log.Fatalf("Failed to fetch hub config: %v", err)
+			}
+
 			priv := getOrGenerateKey(store)
 			// Temporary host to determine PeerID
-			tempNode, err := NewSamNode(context.Background(), priv, []string{})
+			tempNode, err := NewSamNode(context.Background(), priv, hubPubKey, hubAddrs, store)
 			if err != nil {
 				log.Fatalf("Failed to initialize identity: %v", err)
 			}
+			defer func() {
+				if err := tempNode.Host.Close(); err != nil {
+					log.Printf("closing temporary node host: %v", err)
+				}
+			}()
 
 			loginURL := fmt.Sprintf("%s/login?peer_id=%s", hubAddr, tempNode.Host.ID())
 
@@ -96,24 +183,29 @@ func main() {
 
 			token := tokenFlag
 			if token == "" {
-				token, _ = store.LoadIdentity()
+				token, err = store.LoadIdentity()
+				if err != nil {
+					log.Printf("Failed to load identity: %v", err)
+				}
 			}
 			if token == "" {
 				fmt.Println("No identity found. Please run 'sam-node login' or provide --token")
 				return
 			}
 
+			hubPubKey, hubAddrs, err := fetchHubConfig(context.Background(), hubAddr)
+			if err != nil {
+				log.Fatalf("Failed to fetch hub config: %v", err)
+			}
+
 			priv := getOrGenerateKey(store)
-			node, err := NewSamNode(context.Background(), priv, listenAddrs)
+			node, err := NewSamNode(context.Background(), priv, hubPubKey, hubAddrs, store)
 			if err != nil {
 				log.Fatalf("Failed to start mesh node: %v", err)
 			}
 
-			// Register the mandatory sovereign auth hook
-			node.Host.SetStreamHandler(AuthProtocol, node.HandleAuthHandshake)
-			if err := node.ListenForMeshEvents(context.Background()); err != nil {
-				log.Fatalf("Failed to listen for mesh events: %v", err)
-			}
+			// Ensure the auth protocol handler is always installed.
+			node.Host.SetStreamHandler(AuthProtocolID, node.HandleAuthHandshake)
 
 			fmt.Printf("SAM Node Online.\nPeerID: %s\nListening on: %v\n", node.Host.ID(), listenAddrs)
 

@@ -6,9 +6,29 @@ if [[ -z "${MESH_HELPERS_LOADED:-}" ]]; then
   MESH_HELPERS_LOADED=1
 
   MESH_RUNTIME_IMAGE="${MESH_RUNTIME_IMAGE:-sam-e2e-runtime:local}"
+  MESH_NETWORK_SUBNET_BASE="${MESH_NETWORK_SUBNET_BASE:-172.31}"
   MESH_NETWORK=""
   MESH_CONTAINERS=()
   MESH_PREFIX=""
+
+  # Best-effort cleanup of leaked resources from prior failed runs.
+  mesh_cleanup_stale_resources() {
+    local ids
+    ids="$(docker ps -aq --filter "name=mesh-")"
+    if [[ -n "${ids}" ]]; then
+      # shellcheck disable=SC2086
+      docker rm -f ${ids} >/dev/null 2>&1 || true
+    fi
+
+    local nets
+    nets="$(docker network ls --format '{{.Name}}' | grep '^mesh-.*-net$' || true)"
+    if [[ -n "${nets}" ]]; then
+      while IFS= read -r net; do
+        [[ -z "${net}" ]] && continue
+        docker network rm "${net}" >/dev/null 2>&1 || true
+      done <<< "${nets}"
+    fi
+  }
 
   mesh_require_docker() {
     command -v docker >/dev/null 2>&1 || return 1
@@ -24,9 +44,20 @@ if [[ -z "${MESH_HELPERS_LOADED:-}" ]]; then
   }
 
   mesh_setup_env() {
-    MESH_PREFIX="mesh-${BATS_TEST_NUMBER}-$(date +%s)"
+    mesh_cleanup_stale_resources
+
+    MESH_PREFIX="mesh-${BATS_TEST_NUMBER}-$$-$(date +%s)"
     MESH_NETWORK="${MESH_PREFIX}-net"
-    docker network create "${MESH_NETWORK}" >/dev/null
+
+    # Use a deterministic subnet slice to reduce chance of Docker IPAM exhaustion.
+    local subnet
+    local octet
+    octet=$(( (BATS_TEST_NUMBER % 200) + 20 ))
+    subnet="${MESH_NETWORK_SUBNET_BASE}.${octet}.0/24"
+
+    if ! docker network create --subnet "${subnet}" "${MESH_NETWORK}" >/dev/null 2>&1; then
+      docker network create "${MESH_NETWORK}" >/dev/null
+    fi
   }
 
   mesh_cleanup_env() {
