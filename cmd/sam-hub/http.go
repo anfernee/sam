@@ -106,7 +106,7 @@ func (h *Hub) handleCallback(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Failed to fetch user info from OAuth2 provider", 500)
 			return
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 
 		var userData map[string]interface{}
 		if err := json.NewDecoder(resp.Body).Decode(&userData); err != nil {
