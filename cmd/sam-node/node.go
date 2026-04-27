@@ -18,12 +18,16 @@ import (
 	"context"
 	"crypto/ed25519"
 	"fmt"
+	"sync"
 
 	"github.com/biscuit-auth/biscuit-go/v2"
 	"github.com/google/sam/api"
 	"github.com/libp2p/go-libp2p"
 	dht "github.com/libp2p/go-libp2p-kad-dht"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
+	"github.com/libp2p/go-libp2p/p2p/discovery/routing"
+	"github.com/libp2p/go-libp2p/p2p/discovery/util"
+	"time"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
@@ -46,13 +50,16 @@ type SamNode struct {
 	Store        *Store
 	HubPublicKey ed25519.PublicKey
 	HubPeerID    peer.ID
+	knownPeers   map[string]bool
+	mu           sync.Mutex
 }
 
 // NewSamNode creates a new Agent instance secured with the 4-layer pipeline.
-func NewSamNode(ctx context.Context, privKey crypto.PrivKey, hubPubKey ed25519.PublicKey, hubAddrs []multiaddr.Multiaddr, store *Store) (*SamNode, error) {
+func NewSamNode(ctx context.Context, privKey crypto.PrivKey, hubPubKey ed25519.PublicKey, hubAddrs []multiaddr.Multiaddr, store *Store, meshID string, discoveryInterval string) (*SamNode, error) {
 	node := &SamNode{
 		Store:        store,
 		HubPublicKey: hubPubKey,
+		knownPeers:   make(map[string]bool),
 	}
 
 	// Layer 2: Attach the Bouncer (Gater)
@@ -118,6 +125,15 @@ func NewSamNode(ctx context.Context, privKey crypto.PrivKey, hubPubKey ed25519.P
 	// Listen for Network Evictions/Revocations from the Hub
 	go node.listenForHubEvents(ctx)
 
+	interval, err := time.ParseDuration(discoveryInterval)
+	if err != nil {
+		fmt.Printf("[Warning] Invalid discovery interval '%s', using default 2s: %v\n", discoveryInterval, err)
+		interval = 2 * time.Second
+	}
+
+	// Start DHT Discovery
+	go node.startDiscovery(ctx, meshID, interval)
+
 	// Layer 3: Open the Lobby Door (Auth Protocol is bypassed by Layer 4)
 	node.WrapSecurely(AuthProtocolID, node.HandleAuthHandshake)
 
@@ -140,12 +156,54 @@ func (n *SamNode) listenForHubEvents(ctx context.Context) {
 		if err != nil {
 			return
 		}
-		var revMsg api.RevocationMsg
-		if err := proto.Unmarshal(msg.Data, &revMsg); err != nil {
-			fmt.Printf("[Mesh Event] Failed to unmarshal revocation message from %s: %v\n", msg.ReceivedFrom, err)
+		var event api.MeshEvent
+		if err := proto.Unmarshal(msg.Data, &event); err != nil {
+			fmt.Printf("[Mesh Event] Failed to unmarshal event from %s: %v\n", msg.ReceivedFrom, err)
 			continue
 		}
-		fmt.Printf("[Mesh Event] Received Hub update from %s for target %s\n", msg.ReceivedFrom, revMsg.TargetPeerId)
+		
+		n.mu.Lock()
+		switch event.Type {
+		case api.MeshEvent_JOIN:
+			n.knownPeers[event.PeerId] = true
+			fmt.Printf("[Mesh Event] Peer joined: %s\n", event.PeerId)
+		case api.MeshEvent_EXIT, api.MeshEvent_BANNED:
+			delete(n.knownPeers, event.PeerId)
+			fmt.Printf("[Mesh Event] Peer left/banned: %s\n", event.PeerId)
+		}
+		n.mu.Unlock()
+	}
+}
+
+func (n *SamNode) startDiscovery(ctx context.Context, meshID string, interval time.Duration) {
+	routingDiscovery := routing.NewRoutingDiscovery(n.DHT)
+	util.Advertise(ctx, routingDiscovery, meshID)
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			peers, err := routingDiscovery.FindPeers(ctx, meshID)
+			if err != nil {
+				fmt.Printf("[Discovery] Failed to find peers: %v\n", err)
+				continue
+			}
+			for p := range peers {
+				if p.ID == n.Host.ID() {
+					continue
+				}
+				n.mu.Lock()
+				if !n.knownPeers[p.ID.String()] {
+					n.knownPeers[p.ID.String()] = true
+					fmt.Printf("[Discovery] Found new peer via DHT: %s\n", p.ID)
+				}
+				n.mu.Unlock()
+			}
+		}
 	}
 }
 

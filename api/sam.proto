@@ -60,6 +60,17 @@ message RevocationMsg {
   bytes signature = 4;
 }
 
+message MeshEvent {
+  enum Type {
+    JOIN = 0;
+    EXIT = 1;
+    BANNED = 2;
+  }
+  Type type = 1;
+  string peer_id = 2;
+  int64 timestamp = 3;
+}
+
 message EnrollRequest {
   string jwt = 1;
   string peer_id = 2;
@@ -71,4 +82,5 @@ message EnrollResponse {
   bytes hub_public_key = 3;
   repeated string hub_addresses = 4;
   int64 expiration = 5;
+  repeated string known_peers = 6;
 }

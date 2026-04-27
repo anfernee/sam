@@ -8,6 +8,7 @@ export GOROOT GO111MODULE CGO_ENABLED
 build:
 	go build -v -o "$(OUT_DIR)/sam-node" ./cmd/sam-node
 	go build -v -o "$(OUT_DIR)/sam-hub" ./cmd/sam-hub
+	go build -v -o "$(OUT_DIR)/mcp-client" ./cmd/mcp-client
 
 .PHONY: proto
 proto:
@@ -36,7 +37,7 @@ test-e2e: build
 	}
 	SAM_NODE_BINARY=$(OUT_DIR)/sam-node SAM_HUB_BINARY=$(OUT_DIR)/sam-hub bats --verbose-run tests/e2e/
 
-test-e2e-container: docker-build
+test-e2e-container: build docker-build
 	@command -v docker >/dev/null 2>&1 || { echo "docker not found"; exit 1; }
 	@docker info >/dev/null 2>&1 || { echo "docker daemon is not running"; exit 1; }
 	@command -v bats >/dev/null 2>&1 || { echo "bats not found"; exit 1; }

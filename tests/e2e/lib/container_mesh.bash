@@ -10,6 +10,7 @@ if [[ -z "${MESH_HELPERS_LOADED:-}" ]]; then
   MESH_NETWORK=""
   MESH_CONTAINERS=()
   MESH_PREFIX=""
+  MESH_SOCKET_DIR=""
 
   # Best-effort cleanup of leaked resources from prior failed runs.
   mesh_cleanup_stale_resources() {
@@ -58,6 +59,9 @@ if [[ -z "${MESH_HELPERS_LOADED:-}" ]]; then
     if ! docker network create --subnet "${subnet}" "${MESH_NETWORK}" >/dev/null 2>&1; then
       docker network create "${MESH_NETWORK}" >/dev/null
     fi
+
+    MESH_SOCKET_DIR="/tmp/${MESH_PREFIX}-sockets"
+    mkdir -p "${MESH_SOCKET_DIR}"
   }
 
   mesh_cleanup_env() {
@@ -67,6 +71,9 @@ if [[ -z "${MESH_HELPERS_LOADED:-}" ]]; then
     done
     if [[ -n "${MESH_NETWORK}" ]]; then
       docker network rm "${MESH_NETWORK}" >/dev/null 2>&1 || true
+    fi
+    if [[ -n "${MESH_SOCKET_DIR}" ]]; then
+      rm -rf "${MESH_SOCKET_DIR}"
     fi
     MESH_CONTAINERS=()
     MESH_NETWORK=""
@@ -86,6 +93,69 @@ if [[ -z "${MESH_HELPERS_LOADED:-}" ]]; then
         return 0
       fi
       sleep 0.1
+    done
+    return 1
+  }
+
+  mesh_wait_for_mcp_ready() {
+    local idx="$1"
+    local timeout_s="${2:-20}"
+    local i
+    local data='{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}},"id":1}'
+    
+    for ((i=0; i<timeout_s; i++)); do
+      if docker run --rm -v "${MESH_SOCKET_DIR}:/sockets" -e SOCKET_PATH="/sockets/node-${idx}.sock" -e DATA="${data}" python:3.12 python3 -c "
+import socket
+import os
+import sys
+
+try:
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    s.connect(os.environ['SOCKET_PATH'])
+    
+    data = os.environ['DATA'].encode('utf-8')
+    request = f\"POST /mcp HTTP/1.1\\r\\nHost: localhost\\r\\nContent-Type: application/json\\r\\nAccept: application/json, text/event-stream\\r\\nContent-Length: {len(data)}\\r\\n\\r\\n\".encode('utf-8') + data
+    
+    s.sendall(request)
+    response = s.recv(4096).decode('utf-8')
+    s.close()
+    
+    if 'protocolVersion' in response:
+        sys.exit(0)
+except Exception as e:
+    pass
+sys.exit(1)
+" >/dev/null 2>&1; then
+        return 0
+      fi
+      sleep 1
+    done
+    return 1
+  }
+
+  mesh_get_node_count_via_mcp() {
+    local idx="$1"
+    local output
+    output="$(docker run --rm -v "${MESH_SOCKET_DIR}:/sockets" -v "$(pwd)/bin/mcp-client:/mcp-client" python:3.12 /mcp-client -socket "/sockets/node-${idx}.sock" 2>/dev/null)"
+    
+    echo "${output}" | grep "Known peers count:" | awk '{print $4}' | tr -d '\r'
+  }
+
+  mesh_wait_for_node_count() {
+    local idx="$1"
+    local expected="$2"
+    local timeout_s="${3:-20}"
+    local i
+    for ((i=0; i<timeout_s; i++)); do
+      local output
+      output="$(docker run --rm -v "${MESH_SOCKET_DIR}:/sockets" -v "$(pwd)/bin/mcp-client:/mcp-client" python:3.12 /mcp-client -socket "/sockets/node-${idx}.sock" 2>/dev/null)"
+      local count
+      count="$(echo "${output}" | grep "Known peers count:" | awk '{print $4}' | tr -d '\r')"
+      echo "Node ${idx} reported output: ${output}"
+      if [[ "${count}" -eq "${expected}" ]]; then
+        return 0
+      fi
+      sleep 1
     done
     return 1
   }
@@ -255,6 +325,7 @@ EOF
       --name "${name}" \
       --network "${MESH_NETWORK}" \
       --network-alias "sam-node-${idx}" \
+      -v "${MESH_SOCKET_DIR}:/sockets" \
       "sam-node:local" \
       run \
       --hub "/dns4/sam-hub/tcp/4002/p2p/${hub_peer_id}" \
@@ -262,10 +333,11 @@ EOF
       --client-secret "sam-e2e-secret" \
       --token-url "http://mock-oidc:18080/token" \
       --listen "/ip4/0.0.0.0/udp/5001/quic-v1" \
-      --listen "/ip4/0.0.0.0/tcp/5002" >/dev/null
+      --listen "/ip4/0.0.0.0/tcp/5002" \
+      --mcp-socket "/sockets/node-${idx}.sock" \
+      --mesh "e2e-mesh" >/dev/null
 
     MESH_CONTAINERS+=("${name}")
-    mesh_wait_for_log "${name}" "SAM Node Online" 20
   }
 
   mesh_assert_container_running() {

@@ -22,6 +22,8 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"net/http"
+	"path/filepath"
 	"os"
 	"os/signal"
 	"strings"
@@ -46,6 +48,9 @@ var (
 	clientSecretFlag string
 	tokenURLFlag     string
 	hubPublicKeyFlag string
+	mcpSocketFlag    string
+	meshFlag         string
+	discoveryIntervalFlag string
 )
 
 func main() {
@@ -127,7 +132,7 @@ func main() {
 					log.Fatal("Hub public key not found in store and not provided. Cannot verify peers.")
 				}
 				priv := getOrGenerateKey(store)
-				node, err = NewSamNode(context.Background(), priv, hubPubKey, hubAddrs, store)
+				node, err = NewSamNode(context.Background(), priv, hubPubKey, hubAddrs, store, meshFlag, discoveryIntervalFlag)
 				if err != nil {
 					log.Fatalf("Failed to start mesh node: %v", err)
 				}
@@ -158,7 +163,7 @@ func main() {
 				}
 
 				priv := getOrGenerateKey(store)
-				node, err = NewSamNode(context.Background(), priv, nil, initHubAddrs, store)
+				node, err = NewSamNode(context.Background(), priv, nil, initHubAddrs, store, meshFlag, discoveryIntervalFlag)
 				if err != nil {
 					log.Fatalf("Failed to initialize node for enrollment: %v", err)
 				}
@@ -233,6 +238,34 @@ func main() {
 
 			node.Host.SetStreamHandler(AuthProtocolID, node.HandleAuthHandshake)
 
+			// Start MCP Server
+			mcpHandler := NewMCPHandler(node)
+			go func() {
+				socketPath := mcpSocketFlag
+				if socketPath == "" {
+					socketPath = filepath.Join(dataDir, "mcp.sock")
+				}
+				
+				// Remove old socket file if it exists
+				_ = os.Remove(socketPath)
+				
+				listener, err := net.Listen("unix", socketPath)
+				if err != nil {
+					log.Printf("Failed to listen on Unix socket %s: %v", socketPath, err)
+					return
+				}
+				defer func() {
+					if err := listener.Close(); err != nil {
+						log.Printf("Failed to close listener: %v", err)
+					}
+				}()
+				
+				fmt.Printf("Starting MCP server on Unix socket %s\n", socketPath)
+				if err := http.Serve(listener, mcpHandler); err != nil {
+					log.Printf("MCP server error: %v", err)
+				}
+			}()
+
 			fmt.Printf("SAM Node Online.\nPeerID: %s\nListening on: %v\n", node.Host.ID(), listenAddrs)
 
 			// Block forever
@@ -292,7 +325,7 @@ func main() {
 			}
 
 			priv := getOrGenerateKey(store)
-			node, err := NewSamNode(context.Background(), priv, nil, initHubAddrs, store)
+			node, err := NewSamNode(context.Background(), priv, nil, initHubAddrs, store, meshFlag, discoveryIntervalFlag)
 			if err != nil {
 				log.Fatalf("Failed to initialize node for enrollment: %v", err)
 			}
@@ -313,6 +346,9 @@ func main() {
 	runCmd.Flags().StringVar(&clientIDFlag, "client-id", os.Getenv("SAM_OIDC_ID"), "OIDC Client ID for M2M")
 	runCmd.Flags().StringVar(&clientSecretFlag, "client-secret", os.Getenv("SAM_OIDC_SECRET"), "OIDC Client Secret for M2M")
 	runCmd.Flags().StringVar(&hubPublicKeyFlag, "hub-public-key", "", "Hub Public Key (32-byte Hex)")
+	runCmd.Flags().StringVar(&mcpSocketFlag, "mcp-socket", "", "Path to Unix domain socket for local MCP server (default: <datadir>/mcp.sock)")
+	runCmd.Flags().StringVar(&meshFlag, "mesh", "public-mesh", "Mesh federation name")
+	runCmd.Flags().StringVar(&discoveryIntervalFlag, "discovery-interval", "2s", "Polling interval for DHT discovery")
 	rootCmd.PersistentFlags().StringVar(&hubAddr, "hub", "http://localhost:8080", "Hub URL")
 	rootCmd.PersistentFlags().StringVar(&tokenURLFlag, "token-url", "", "OIDC Token URL")
 
@@ -414,6 +450,14 @@ func (n *SamNode) Enroll(ctx context.Context, jwt string) error {
 	if err := n.Store.SaveHubConfig(resp.HubPublicKey, resp.HubAddresses); err != nil {
 		return fmt.Errorf("failed to save hub config: %v", err)
 	}
+
+	// Add known peers from response
+	n.mu.Lock()
+	for _, p := range resp.KnownPeers {
+		n.knownPeers[p] = true
+		fmt.Printf("[Enroll] Added known peer from hub: %s\n", p)
+	}
+	n.mu.Unlock()
 
 	fmt.Println("Successfully enrolled and stored identity and hub config.")
 	return nil

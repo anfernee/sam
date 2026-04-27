@@ -177,7 +177,7 @@ func (h *Hub) handleEnroll(s network.Stream) {
 
 	if req.PeerId != remotePeer.String() {
 		fmt.Printf("[Enroll] Peer ID mismatch: %s != %s\n", req.PeerId, remotePeer)
-		h.sendEnrollResponse(s, nil, "Peer ID mismatch", 0)
+		h.sendEnrollResponse(s, nil, "Peer ID mismatch", 0, nil)
 		return
 	}
 
@@ -186,13 +186,13 @@ func (h *Hub) handleEnroll(s network.Stream) {
 	jwtToken, _, err := parser.ParseUnverified(req.Jwt, jwt.MapClaims{})
 	if err != nil {
 		fmt.Printf("[Enroll] Failed to parse JWT: %v\n", err)
-		h.sendEnrollResponse(s, nil, "Failed to parse JWT", 0)
+		h.sendEnrollResponse(s, nil, "Failed to parse JWT", 0, nil)
 		return
 	}
 	claims, ok := jwtToken.Claims.(jwt.MapClaims)
 	if !ok {
 		fmt.Printf("[Enroll] Invalid JWT claims\n")
-		h.sendEnrollResponse(s, nil, "Invalid JWT claims", 0)
+		h.sendEnrollResponse(s, nil, "Invalid JWT claims", 0, nil)
 		return
 	}
 	iss, _ := claims["iss"].(string)
@@ -210,18 +210,16 @@ func (h *Hub) handleEnroll(s network.Stream) {
 	provider, ok := h.Providers[iss]
 	if !ok {
 		fmt.Printf("[Enroll] Unknown issuer: %s\n", iss)
-		h.sendEnrollResponse(s, nil, fmt.Sprintf("Unknown issuer: %s", iss), 0)
+		h.sendEnrollResponse(s, nil, fmt.Sprintf("Unknown issuer: %s", iss), 0, nil)
 		return
 	}
 
-	// TODO: Revisit client check later (enforce specific audience)
-	// For now we accept whatever audience is in the token by passing it as expected ClientID
 	verifier := provider.Verifier(&oidc.Config{ClientID: aud})
 
 	token, err := verifier.Verify(context.Background(), req.Jwt)
 	if err != nil {
 		fmt.Printf("[Enroll] JWT validation failed: %v\n", err)
-		h.sendEnrollResponse(s, nil, fmt.Sprintf("JWT validation failed: %v", err), 0)
+		h.sendEnrollResponse(s, nil, fmt.Sprintf("JWT validation failed: %v", err), 0, nil)
 		return
 	}
 
@@ -241,7 +239,7 @@ func (h *Hub) handleEnroll(s network.Stream) {
 		IDs:  []biscuit.Term{biscuit.Date(token.Expiry)},
 	}}); err != nil {
 		fmt.Printf("[Enroll] Failed to add expiration fact: %v\n", err)
-		h.sendEnrollResponse(s, nil, "Failed to mint biscuit", 0)
+		h.sendEnrollResponse(s, nil, "Failed to mint biscuit", 0, nil)
 		return
 	}
 
@@ -250,7 +248,7 @@ func (h *Hub) handleEnroll(s network.Stream) {
 		IDs:  []biscuit.Term{biscuit.String(remotePeer.String())},
 	}}); err != nil {
 		fmt.Printf("[Enroll] Failed to add node fact: %v\n", err)
-		h.sendEnrollResponse(s, nil, "Failed to mint biscuit", 0)
+		h.sendEnrollResponse(s, nil, "Failed to mint biscuit", 0, nil)
 		return
 	}
 
@@ -260,7 +258,7 @@ func (h *Hub) handleEnroll(s network.Stream) {
 			IDs:  []biscuit.Term{biscuit.String(role)},
 		}}); err != nil {
 			fmt.Printf("[Enroll] Failed to add group fact: %v\n", err)
-			h.sendEnrollResponse(s, nil, "Failed to mint biscuit", 0)
+			h.sendEnrollResponse(s, nil, "Failed to mint biscuit", 0, nil)
 			return
 		}
 	}
@@ -268,27 +266,50 @@ func (h *Hub) handleEnroll(s network.Stream) {
 	t, err := builder.Build()
 	if err != nil {
 		fmt.Printf("[Enroll] Failed to build biscuit: %v\n", err)
-		h.sendEnrollResponse(s, nil, "Failed to build biscuit", 0)
+		h.sendEnrollResponse(s, nil, "Failed to build biscuit", 0, nil)
 		return
 	}
 
 	biscuitData, err := t.Serialize()
 	if err != nil {
 		fmt.Printf("[Enroll] Failed to serialize biscuit: %v\n", err)
-		h.sendEnrollResponse(s, nil, "Failed to serialize biscuit", 0)
+		h.sendEnrollResponse(s, nil, "Failed to serialize biscuit", 0, nil)
 		return
 	}
 
 	h.gater.mu.Lock()
 	h.gater.authenticated[remotePeer] = true
 	delete(h.gater.pending, remotePeer)
+	
+	// Collect authenticated peers
+	var knownPeers []string
+	for p := range h.gater.authenticated {
+		knownPeers = append(knownPeers, p.String())
+	}
 	h.gater.mu.Unlock()
 
-	h.sendEnrollResponse(s, biscuitData, "", token.Expiry.Unix())
+	h.sendEnrollResponse(s, biscuitData, "", token.Expiry.Unix(), knownPeers)
 	fmt.Printf("[Enroll] Successfully enrolled peer %s\n", remotePeer)
+
+	// Publish JOIN event
+	event := &api.MeshEvent{
+		Type:      api.MeshEvent_JOIN,
+		PeerId:    remotePeer.String(),
+		Timestamp: time.Now().Unix(),
+	}
+	eventData, err := proto.Marshal(event)
+	if err != nil {
+		fmt.Printf("[Enroll] Failed to marshal event: %v\n", err)
+	} else {
+		if err := h.EventTopic.Publish(context.Background(), eventData); err != nil {
+			fmt.Printf("[Enroll] Failed to publish event: %v\n", err)
+		} else {
+			fmt.Printf("[Enroll] Published JOIN event for %s\n", remotePeer)
+		}
+	}
 }
 
-func (h *Hub) sendEnrollResponse(s network.Stream, biscuitToken []byte, errMsg string, expiration int64) {
+func (h *Hub) sendEnrollResponse(s network.Stream, biscuitToken []byte, errMsg string, expiration int64, knownPeers []string) {
 	var hubAddrs []string
 	for _, addr := range h.Host.Addrs() {
 		hubAddrs = append(hubAddrs, addr.String()+"/p2p/"+h.Host.ID().String())
@@ -302,6 +323,7 @@ func (h *Hub) sendEnrollResponse(s network.Stream, biscuitToken []byte, errMsg s
 		HubPublicKey: pubKey,
 		HubAddresses: hubAddrs,
 		Expiration:   expiration,
+		KnownPeers:   knownPeers,
 	}
 	data, err := proto.Marshal(resp)
 	if err != nil {
