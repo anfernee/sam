@@ -3,7 +3,7 @@
 SAM is a minimal libp2p-based mesh with two binaries:
 
 - `sam-hub`: OIDC bridge + Biscuit issuer + connection gater
-- `sam-node`: node identity/login flow + mesh node runtime
+- `sam-node`: node identity/login flow + mesh node runtime + local MCP server
 
 The current repository intentionally focuses on basic functionality and testability.
 
@@ -45,6 +45,18 @@ Or pass a token directly:
 
 ```bash
 ./bin/sam-node run --token <identity-biscuit>
+```
+
+## Local MCP Server
+
+Each `sam-node` exposes a Model Context Protocol (MCP) server over a Unix domain socket to allow local processes to discover the capabilities of the local agent and get information from the mesh.
+
+By default, the socket listens at `<datadir>/mcp.sock`. You can change this with the `--mcp-socket` flag.
+
+To query the mesh info via the MCP server, you can use the `mcp-client` tool provided in the repository:
+
+```bash
+./bin/mcp-client -socket /path/to/mcp.sock
 ```
 
 ## Testing
