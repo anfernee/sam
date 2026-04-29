@@ -26,10 +26,11 @@ import (
 	"time"
 
 	"github.com/biscuit-auth/biscuit-go/v2"
+	"github.com/biscuit-auth/biscuit-go/v2/parser"
 	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/golang-jwt/jwt/v5"
-	golog "github.com/ipfs/go-log/v2"
 	"github.com/google/sam/api"
+	golog "github.com/ipfs/go-log/v2"
 	"github.com/libp2p/go-libp2p"
 	dht "github.com/libp2p/go-libp2p-kad-dht"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
@@ -57,6 +58,7 @@ var (
 	meshName              string
 	insecureSkipTLSVerify bool
 	logLevel              string
+	policyFile            string
 )
 
 var logger = golog.Logger("sam-hub")
@@ -71,10 +73,11 @@ type Hub struct {
 	PubSub     *pubsub.PubSub
 	EventTopic *pubsub.Topic
 	gater      *hubConnGate
+	Policy     *api.PolicyConfig
 }
 
 // NewHub starts a host supporting both QUIC and TCP (with TLS 1.3)
-func NewHub(ctx context.Context) (*Hub, error) {
+func NewHub(ctx context.Context, policy *api.PolicyConfig) (*Hub, error) {
 	gater := newHubConnGate()
 	// Multi-transport setup for firewall traversal
 	h, err := libp2p.New(
@@ -141,6 +144,7 @@ func NewHub(ctx context.Context) (*Hub, error) {
 		Providers:  providers,
 		BiscuitKey: bKey,
 		MeshID:     meshName,
+		Policy:     policy,
 	}
 
 	h.Network().Notify(&notifier{hub: hub})
@@ -185,8 +189,8 @@ func (h *Hub) handleEnroll(s network.Stream) {
 	}
 
 	// Parse JWT unverified to get issuer and audience
-	parser := jwt.Parser{}
-	jwtToken, _, err := parser.ParseUnverified(req.Jwt, jwt.MapClaims{})
+	jwtParser := jwt.Parser{}
+	jwtToken, _, err := jwtParser.ParseUnverified(req.Jwt, jwt.MapClaims{})
 	if err != nil {
 		logger.Errorf("[Enroll] Failed to parse JWT: %v", err)
 		h.sendEnrollResponse(s, nil, "Failed to parse JWT", 0, nil, nil)
@@ -285,6 +289,48 @@ func (h *Hub) handleEnroll(s network.Stream) {
 			h.sendEnrollResponse(s, nil, "Failed to mint biscuit", 0, nil, nil)
 			return
 		}
+
+		if h.Policy != nil {
+			if rolePolicy, ok := h.Policy.Roles[role]; ok {
+				for _, tool := range rolePolicy.MCP.AllowedTools {
+					if err := builder.AddAuthorityFact(biscuit.Fact{Predicate: biscuit.Predicate{
+						Name: api.FactMCPTool,
+						IDs:  []biscuit.Term{biscuit.String(tool)},
+					}}); err != nil {
+						logger.Errorf("[Enroll] Failed to add fact %s: %v", api.FactMCPTool, err)
+					}
+				}
+				for _, target := range rolePolicy.Network.AllowedTargets {
+					if err := builder.AddAuthorityFact(biscuit.Fact{Predicate: biscuit.Predicate{
+						Name: api.FactNetworkTarget,
+						IDs:  []biscuit.Term{biscuit.String(target)},
+					}}); err != nil {
+						logger.Errorf("[Enroll] Failed to add fact %s: %v", api.FactNetworkTarget, err)
+					}
+				}
+				for _, customFact := range rolePolicy.CustomDatalog {
+					trimmed := strings.TrimRight(strings.TrimSpace(customFact), ";")
+					if trimmed == "" {
+						continue
+					}
+					func() {
+						defer func() {
+							if r := recover(); r != nil {
+								logger.Errorf("[Enroll] Panic parsing custom fact %q: %v", trimmed, r)
+							}
+						}()
+						fact, err := parser.FromStringFact(trimmed)
+						if err != nil {
+							logger.Errorf("[Enroll] Failed to parse custom fact %q: %v", trimmed, err)
+							return
+						}
+						if err := builder.AddAuthorityFact(fact); err != nil {
+							logger.Errorf("[Enroll] Failed to add custom fact %s: %v", trimmed, err)
+						}
+					}()
+				}
+			}
+		}
 	}
 
 	t, err := builder.Build()
@@ -346,13 +392,12 @@ func (h *Hub) sendEnrollResponse(s network.Stream, biscuitToken []byte, errMsg s
 	pubKey := h.BiscuitKey.Public().(ed25519.PublicKey)
 
 	resp := &api.EnrollResponse{
-		BiscuitToken:    biscuitToken,
-		ErrorMessage:    errMsg,
-		HubPublicKey:    pubKey,
-		HubAddresses:    hubAddrs,
-		Expiration:      expiration,
-		KnownPeers:      knownPeers,
-		DatalogPolicies: policies,
+		BiscuitToken: biscuitToken,
+		ErrorMessage: errMsg,
+		HubPublicKey: pubKey,
+		HubAddresses: hubAddrs,
+		Expiration:   expiration,
+		KnownPeers:   knownPeers,
 	}
 	data, err := proto.Marshal(resp)
 	if err != nil {
@@ -393,7 +438,7 @@ func main() {
 		Short: "Sovereign Agent Mesh - Multi-Transport Hub",
 		Run: func(cmd *cobra.Command, args []string) {
 			ctx := context.Background()
-			
+
 			// Initialize logging
 			golog.SetAllLoggers(golog.LevelInfo)
 			if logLevel != "" {
@@ -402,8 +447,13 @@ func main() {
 					golog.SetAllLoggers(lvl)
 				}
 			}
-			
-			h, err := NewHub(ctx)
+
+			policyConfig, err := LoadPolicyConfig(policyFile)
+			if err != nil {
+				logger.Fatal(err)
+			}
+
+			h, err := NewHub(ctx, policyConfig)
 			if err != nil {
 				logger.Fatal(err)
 			}
@@ -432,6 +482,7 @@ func main() {
 	rootCmd.Flags().StringVar(&meshName, "mesh", "public-mesh", "Mesh federation name")
 	rootCmd.Flags().BoolVar(&insecureSkipTLSVerify, "insecure-skip-tls-verify", false, "Skip TLS verification for OIDC issuers")
 	rootCmd.Flags().StringVar(&logLevel, "log-level", "info", "Log level (debug, info, warn, error)")
+	rootCmd.Flags().StringVar(&policyFile, "policy-file", "policies.yaml", "Path to policies.yaml")
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)

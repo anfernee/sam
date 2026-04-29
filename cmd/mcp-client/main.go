@@ -16,6 +16,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -27,6 +28,8 @@ import (
 
 func main() {
 	socketPath := flag.String("socket", "", "Path to Unix domain socket")
+	toolName := flag.String("tool", "get_mesh_info", "Tool to call")
+	toolArgs := flag.String("args", "{}", "JSON arguments for the tool")
 	flag.Parse()
 
 	if *socketPath == "" {
@@ -59,14 +62,20 @@ func main() {
 		}
 	}()
 
-	// Call tool get_mesh_info
+	var args map[string]any
+	if *toolArgs != "" {
+		if err := json.Unmarshal([]byte(*toolArgs), &args); err != nil {
+			log.Fatalf("Failed to parse args: %v", err)
+		}
+	}
+
+	// Call tool
 	result, err := session.CallTool(ctx, &mcp.CallToolParams{
-		Name:      "get_mesh_info",
-		Arguments: map[string]any{},
+		Name:      *toolName,
+		Arguments: args,
 	})
 	if err != nil {
-		log.Printf("CallTool failed: %v", err)
-		return
+		log.Fatalf("CallTool failed: %v", err)
 	}
 
 	for _, content := range result.Content {

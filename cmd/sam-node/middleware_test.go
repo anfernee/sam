@@ -17,10 +17,14 @@ package main
 import (
 	"crypto/ed25519"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/biscuit-auth/biscuit-go/v2"
+	"github.com/biscuit-auth/biscuit-go/v2/parser"
+	"github.com/google/sam/api"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/libp2p/go-libp2p/core/protocol"
 )
 
 func TestAuthorize(t *testing.T) {
@@ -40,11 +44,7 @@ func TestAuthorize(t *testing.T) {
 		_ = store.Close()
 	}()
 
-	// Save a dummy policy
-	policies := []string{"allow if operation($op)"}
-	if err := store.SavePolicies(policies); err != nil {
-		t.Fatal(err)
-	}
+
 
 	// Create a biscuit token
 	pub, priv, err := ed25519.GenerateKey(nil)
@@ -64,19 +64,11 @@ func TestAuthorize(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Add fact and rule to make it succeed
+	// Add fact to match baseline rule
 	err = builder.AddAuthorityFact(biscuit.Fact{Predicate: biscuit.Predicate{
-		Name: "right",
-		IDs:  []biscuit.Term{biscuit.String("test")},
+		Name: api.FactMCPTool,
+		IDs:  []biscuit.Term{biscuit.String("/test/proto")},
 	}})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	err = builder.AddAuthorityRule(biscuit.Rule{
-		Head: biscuit.Predicate{Name: "allow", IDs: []biscuit.Term{}},
-		Body: []biscuit.Predicate{{Name: "right", IDs: []biscuit.Term{biscuit.String("test")}}},
-	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,5 +95,153 @@ func TestAuthorize(t *testing.T) {
 
 	if err := node.Authorize(tokenBytes, req); err != nil {
 		t.Fatalf("Authorize failed: %v", err)
+	}
+}
+
+func TestEnterprisePolicyEngine(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dummyPeer := peer.ID("dummy-peer")
+
+	tests := []struct {
+		name            string
+		mintToken       func(t *testing.T, builder biscuit.Builder)
+		operation       string
+		localPolicyYAML string
+		expectSuccess   bool
+	}{
+		{
+			name: "Case 1 (Happy Path)",
+			mintToken: func(t *testing.T, builder biscuit.Builder) {
+				fact, err := parser.FromStringFact(`allow_mcp_tool("query_db")`)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := builder.AddAuthorityFact(fact); err != nil {
+					t.Fatal(err)
+				}
+			},
+			operation:     "query_db",
+			expectSuccess: true,
+		},
+		{
+			name: "Case 2 (Unauthorized Tool)",
+			mintToken: func(t *testing.T, builder biscuit.Builder) {
+				fact, err := parser.FromStringFact(`allow_mcp_tool("query_db")`)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := builder.AddAuthorityFact(fact); err != nil {
+					t.Fatal(err)
+				}
+			},
+			operation:     "reboot_server",
+			expectSuccess: false,
+		},
+		{
+			name: "Case 3 (Wildcard Access)",
+			mintToken: func(t *testing.T, builder biscuit.Builder) {
+				fact, err := parser.FromStringFact(`allow_mcp_tool("*")`)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := builder.AddAuthorityFact(fact); err != nil {
+					t.Fatal(err)
+				}
+			},
+			operation:     "anything",
+			expectSuccess: true,
+		},
+		{
+			name: "Case 4 (Local Attenuation Override)",
+			mintToken: func(t *testing.T, builder biscuit.Builder) {
+				fact1, err := parser.FromStringFact(`allow_mcp_tool("*")`)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := builder.AddAuthorityFact(fact1); err != nil {
+					t.Fatal(err)
+				}
+				fact2, err := parser.FromStringFact(`user("alice")`)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := builder.AddAuthorityFact(fact2); err != nil {
+					t.Fatal(err)
+				}
+			},
+			operation: "query_db",
+			localPolicyYAML: `
+version: "v1alpha1"
+attenuation:
+  policies:
+    - 'deny if user("alice");'
+`,
+			expectSuccess: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			builder := biscuit.NewBuilder(priv)
+			
+			err := builder.AddAuthorityFact(biscuit.Fact{Predicate: biscuit.Predicate{
+				Name: "node",
+				IDs:  []biscuit.Term{biscuit.String(dummyPeer.String())},
+			}})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			tt.mintToken(t, builder)
+
+			b, err := builder.Build()
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			tokenBytes, err := b.Serialize()
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			var localPolicy *CompiledLocalPolicy
+			if tt.localPolicyYAML != "" {
+				dir := t.TempDir()
+				policyFile := filepath.Join(dir, "local_policy.yaml")
+				if err := os.WriteFile(policyFile, []byte(tt.localPolicyYAML), 0644); err != nil {
+					t.Fatal(err)
+				}
+				var err error
+				localPolicy, err = LoadLocalPolicy(policyFile)
+				if err != nil {
+					t.Fatalf("failed to load local policy: %v", err)
+				}
+			}
+
+			node := &SamNode{
+				HubPublicKey: pub,
+				LocalPolicy:  localPolicy,
+			}
+
+			req := RequestContext{
+				PeerID:   dummyPeer,
+				Protocol: protocol.ID(tt.operation),
+			}
+
+			err = node.Authorize(tokenBytes, req)
+			if tt.expectSuccess {
+				if err != nil {
+					t.Errorf("expected success, got error: %v", err)
+				}
+			} else {
+				if err == nil {
+					t.Error("expected failure, got success")
+				}
+			}
+		})
 	}
 }

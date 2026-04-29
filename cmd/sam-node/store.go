@@ -29,7 +29,6 @@ const (
 	keyBiscuit     = "identity_biscuit"
 	keyPrivKey     = "node_private_key"
 	keyIdentityExp = "identity_expiration"
-	keyPolicies    = "datalog_policies"
 )
 
 type Store struct {
@@ -71,14 +70,14 @@ func NewStore(dir string) (*Store, error) {
 	return &Store{db: db}, err
 }
 
-func (s *Store) SaveIdentity(biscuit string) error {
+func (s *Store) SaveIdentity(biscuit []byte) error {
 	return s.db.Update(func(tx *bbolt.Tx) error {
 		b := tx.Bucket([]byte(bucketIdentity))
-		return b.Put([]byte(keyBiscuit), []byte(biscuit))
+		return b.Put([]byte(keyBiscuit), biscuit)
 	})
 }
 
-func (s *Store) LoadIdentity() (string, error) {
+func (s *Store) LoadIdentity() ([]byte, error) {
 	var val []byte
 	_ = s.db.View(func(tx *bbolt.Tx) error {
 		b := tx.Bucket([]byte(bucketIdentity))
@@ -86,9 +85,9 @@ func (s *Store) LoadIdentity() (string, error) {
 		return nil
 	})
 	if len(val) == 0 {
-		return "", fmt.Errorf("no identity found")
+		return nil, fmt.Errorf("no identity found")
 	}
-	return string(val), nil
+	return val, nil
 }
 
 func (s *Store) SaveIdentityExpiration(exp int64) error {
@@ -224,25 +223,4 @@ func (s *Store) GetVerifiedIdentity(p peer.ID) (*VerifiedIdentity, error) {
 	return &identity, err
 }
 
-func (s *Store) SavePolicies(policies []string) error {
-	return s.db.Update(func(tx *bbolt.Tx) error {
-		b := tx.Bucket([]byte(bucketIdentity))
-		data, _ := json.Marshal(policies)
-		return b.Put([]byte(keyPolicies), data)
-	})
-}
 
-func (s *Store) LoadPolicies() ([]string, error) {
-	var val []byte
-	_ = s.db.View(func(tx *bbolt.Tx) error {
-		b := tx.Bucket([]byte(bucketIdentity))
-		val = b.Get([]byte(keyPolicies))
-		return nil
-	})
-	if len(val) == 0 {
-		return nil, nil // Return empty if none found
-	}
-	var policies []string
-	err := json.Unmarshal(val, &policies)
-	return policies, err
-}
