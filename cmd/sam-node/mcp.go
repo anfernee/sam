@@ -156,6 +156,34 @@ func NewMCPHandler(node *SamNode) http.Handler {
 		}, nil, nil
 	})
 
+	// Add the call_remote_tool tool.
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "call_remote_tool",
+		Description: "Call an MCP tool on a remote agent",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, params struct {
+		PeerID    string `json:"peer_id" jsonschema:"The Peer ID of the target agent"`
+		ToolName  string `json:"tool_name" jsonschema:"The name of the tool to call"`
+		Arguments string `json:"arguments" jsonschema:"JSON encoded arguments for the tool"`
+	}) (*mcp.CallToolResult, any, error) {
+		logger.Infof("[MCP] call_remote_tool called for peer %s, tool %s", params.PeerID, params.ToolName)
+		targetPeer, err := peer.Decode(params.PeerID)
+		if err != nil {
+			return nil, nil, err
+		}
+		var args map[string]any
+		if params.Arguments != "" {
+			if err := json.Unmarshal([]byte(params.Arguments), &args); err != nil {
+				return nil, nil, err
+			}
+		}
+
+		res, err := node.CallMCPTool(ctx, targetPeer, params.ToolName, args)
+		if err != nil {
+			return nil, nil, err
+		}
+		return res, nil, nil
+	})
+
 	// Add the connect_peer tool.
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "connect_peer",
@@ -221,14 +249,14 @@ func (n *SamNode) callMCPToolOnce(ctx context.Context, targetPeer peer.ID, toolN
 	}()
 
 	// Load this node's biscuit
-	biscuitStr, err := n.Store.LoadIdentity()
+	biscuitBytes, err := n.Store.LoadIdentity()
 	if err != nil {
 		return nil, fmt.Errorf("failed to load identity biscuit: %w", err)
 	}
 
 	// Marshal AuthFrame
 	authFrame := api.AuthFrame{
-		Biscuit: []byte(biscuitStr),
+		Biscuit: biscuitBytes,
 	}
 	authBytes, _ := proto.Marshal(&authFrame)
 

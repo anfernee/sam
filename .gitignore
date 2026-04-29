@@ -33,3 +33,4 @@ go.work.sum
 #
 bin/
 tests/e2e/logs/
+tests/integration/scratch/

@@ -16,7 +16,6 @@ package main
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/biscuit-auth/biscuit-go/v2"
 	"github.com/biscuit-auth/biscuit-go/v2/parser"
@@ -118,19 +117,33 @@ func (n *SamNode) Authorize(rawToken []byte, req RequestContext) error {
 		},
 	})
 
-	// Load dynamic policies from store and add them as facts
-	policies, err := n.Store.LoadPolicies()
-	if err != nil {
-		return fmt.Errorf("failed to load policies: %w", err)
-	}
-	for _, policyStr := range policies {
-		cleanPolicy := strings.TrimRight(strings.TrimSpace(policyStr), ";")
-		p, err := parser.FromStringPolicy(cleanPolicy)
-		if err != nil {
-			return fmt.Errorf("failed to parse policy '%s': %w", policyStr, err)
+	// Apply Pre-compiled Local Attenuation
+	if n.LocalPolicy != nil {
+		for _, p := range n.LocalPolicy.Policies {
+			authorizer.AddPolicy(p)
 		}
-		authorizer.AddPolicy(p)
+		for _, c := range n.LocalPolicy.Checks {
+			authorizer.AddCheck(c)
+		}
+		for _, r := range n.LocalPolicy.Rules {
+			authorizer.AddRule(r)
+		}
 	}
+
+	// Baseline Rules
+	rule1Str := fmt.Sprintf(`allow if operation($op), %s($op)`, api.FactMCPTool)
+	rule1, err := parser.FromStringPolicy(rule1Str)
+	if err != nil {
+		return fmt.Errorf("failed to parse baseline rule 1: %w", err)
+	}
+	authorizer.AddPolicy(rule1)
+
+	rule2Str := fmt.Sprintf(`allow if operation($op), %s("*")`, api.FactMCPTool)
+	rule2, err := parser.FromStringPolicy(rule2Str)
+	if err != nil {
+		return fmt.Errorf("failed to parse baseline rule 2: %w", err)
+	}
+	authorizer.AddPolicy(rule2)
 
 	return authorizer.Authorize()
 }

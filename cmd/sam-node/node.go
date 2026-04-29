@@ -54,16 +54,18 @@ type SamNode struct {
 	receivedMsgs map[string][]string
 	topics       map[string]*pubsub.Topic
 	mu           sync.Mutex
+	LocalPolicy  *CompiledLocalPolicy
 }
 
 // NewSamNode creates a new Agent instance secured with the 4-layer pipeline.
-func NewSamNode(ctx context.Context, privKey crypto.PrivKey, hubPubKey ed25519.PublicKey, hubAddrs []multiaddr.Multiaddr, store *Store, meshID string, discoveryInterval string, listenAddrs []string, enableRelay bool) (*SamNode, error) {
+func NewSamNode(ctx context.Context, privKey crypto.PrivKey, hubPubKey ed25519.PublicKey, hubAddrs []multiaddr.Multiaddr, store *Store, meshID string, discoveryInterval string, listenAddrs []string, enableRelay bool, localPolicy *CompiledLocalPolicy) (*SamNode, error) {
 	node := &SamNode{
 		Store:        store,
 		HubPublicKey: hubPubKey,
 		knownPeers:   make(map[string]bool),
 		receivedMsgs: make(map[string][]string),
 		topics:       make(map[string]*pubsub.Topic),
+		LocalPolicy:  localPolicy,
 	}
 
 	// Layer 2: Attach the Bouncer (Gater)

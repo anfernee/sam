@@ -1,11 +1,15 @@
 # SAM: Sovereign Agent Mesh
 
-SAM is a minimal libp2p-based mesh with two binaries:
+SAM is a smart network built for autonomous agents:
 
-- `sam-hub`: OIDC bridge + Biscuit issuer + connection gater
-- `sam-node`: node identity/login flow + mesh node runtime + local MCP server
+*   **Zero Config:** Nodes discover each other and build the network automatically.
+*   **Zero Trust:** Every connection, node, and packet is strictly authenticated.
+*   **Agentic Network:** Built for agents to use. The nodes provide the self-healing, peer-to-peer infrastructure, allowing autonomous agents to seamlessly plug in, communicate, and operate across the mesh.
+*   **Portability:** Environment-agnostic and IP-independent. Network identity is cryptographic and travels with the node, enabling mobility across cloud, edge, and local setups.
 
-The current repository intentionally focuses on basic functionality and testability.
+
+- `sam-hub`: The control plane for identity and policy distribution.
+- `sam-node`: The lightweight agents that form the actual peer-to-peer mesh.
 
 ## Build
 
@@ -44,7 +48,7 @@ This prints a login URL. After authenticating in browser, paste the returned bis
 Or pass a token directly:
 
 ```bash
-./bin/sam-node run --token <identity-biscuit>
+./bin/sam-node run --token <identity-token>
 ```
 
 ## Local MCP Server

@@ -17,7 +17,6 @@ package main
 import (
 	"context"
 	"crypto/ed25519"
-	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"net"
@@ -53,6 +52,7 @@ var (
 	discoveryIntervalFlag string
 	enableRelayFlag       bool
 	logLevelFlag          string
+	localPolicyFile       string
 )
 
 var logger = golog.Logger("sam-node")
@@ -86,6 +86,11 @@ func main() {
 			store, err := NewStore(dataDir)
 			if err != nil {
 				logger.Fatalf("Failed to open store: %v", err)
+			}
+			
+			localPolicy, err := LoadLocalPolicy(localPolicyFile)
+			if err != nil {
+				logger.Fatalf("Failed to load local policy: %v", err)
 			}
 			defer func() {
 				if err := store.Close(); err != nil {
@@ -137,7 +142,7 @@ func main() {
 
 			if jwtStr == "" {
 				token, _ := store.LoadIdentity()
-				if token == "" {
+				if len(token) == 0 {
 					logger.Fatal("No JWT or stored identity found. Cannot authenticate.")
 				}
 				fmt.Println("Using stored identity.")
@@ -146,7 +151,7 @@ func main() {
 					logger.Fatal("Hub public key not found in store and not provided. Cannot verify peers.")
 				}
 				priv := getOrGenerateKey(store)
-				node, err = NewSamNode(context.Background(), priv, hubPubKey, hubAddrs, store, meshFlag, discoveryIntervalFlag, listenAddrs, enableRelayFlag)
+				node, err = NewSamNode(context.Background(), priv, hubPubKey, hubAddrs, store, meshFlag, discoveryIntervalFlag, listenAddrs, enableRelayFlag, localPolicy)
 				if err != nil {
 					logger.Fatalf("Failed to start mesh node: %v", err)
 				}
@@ -177,7 +182,7 @@ func main() {
 				}
 
 				priv := getOrGenerateKey(store)
-				node, err = NewSamNode(context.Background(), priv, nil, initHubAddrs, store, meshFlag, discoveryIntervalFlag, listenAddrs, enableRelayFlag)
+				node, err = NewSamNode(context.Background(), priv, nil, initHubAddrs, store, meshFlag, discoveryIntervalFlag, listenAddrs, enableRelayFlag, localPolicy)
 				if err != nil {
 					logger.Fatalf("Failed to initialize node for enrollment: %v", err)
 				}
@@ -301,6 +306,11 @@ func main() {
 			if err != nil {
 				logger.Fatalf("Failed to open store: %v", err)
 			}
+			
+			localPolicy, err := LoadLocalPolicy(localPolicyFile)
+			if err != nil {
+				logger.Fatalf("Failed to load local policy: %v", err)
+			}
 			defer func() {
 				if err := store.Close(); err != nil {
 					logger.Errorf("closing store: %v", err)
@@ -339,7 +349,7 @@ func main() {
 			}
 
 			priv := getOrGenerateKey(store)
-			node, err := NewSamNode(context.Background(), priv, nil, initHubAddrs, store, meshFlag, discoveryIntervalFlag, listenAddrs, enableRelayFlag)
+			node, err := NewSamNode(context.Background(), priv, nil, initHubAddrs, store, meshFlag, discoveryIntervalFlag, listenAddrs, enableRelayFlag, localPolicy)
 			if err != nil {
 				logger.Fatalf("Failed to initialize node for enrollment: %v", err)
 			}
@@ -366,6 +376,7 @@ func main() {
 	runCmd.Flags().BoolVar(&enableRelayFlag, "enable-relay", false, "Allow this node to serve as a relay for others")
 	runCmd.Flags().StringVar(&logLevelFlag, "log-level", "info", "Log level (debug, info, warn, error)")
 	rootCmd.PersistentFlags().StringVar(&hubAddr, "hub", "http://localhost:8080", "Hub URL")
+	rootCmd.PersistentFlags().StringVar(&localPolicyFile, "local-policy", "local_policy.yaml", "Path to local_policy.yaml")
 	rootCmd.PersistentFlags().StringVar(&tokenURLFlag, "token-url", "", "OIDC Token URL")
 
 	rootCmd.AddCommand(runCmd)
@@ -454,8 +465,7 @@ func (n *SamNode) Enroll(ctx context.Context, jwt string) error {
 		return fmt.Errorf("received empty biscuit token")
 	}
 
-	tokenStr := base64.StdEncoding.EncodeToString(resp.BiscuitToken)
-	if err := n.Store.SaveIdentity(tokenStr); err != nil {
+	if err := n.Store.SaveIdentity(resp.BiscuitToken); err != nil {
 		return fmt.Errorf("failed to save identity: %v", err)
 	}
 
@@ -467,11 +477,7 @@ func (n *SamNode) Enroll(ctx context.Context, jwt string) error {
 		return fmt.Errorf("failed to save hub config: %v", err)
 	}
 
-	if len(resp.DatalogPolicies) > 0 {
-		if err := n.Store.SavePolicies(resp.DatalogPolicies); err != nil {
-			return fmt.Errorf("failed to save policies: %v", err)
-		}
-	}
+
 
 	// Add known peers from response
 	n.mu.Lock()
