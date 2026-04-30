@@ -55,6 +55,8 @@ type SamNode struct {
 	topics       map[string]*pubsub.Topic
 	mu           sync.Mutex
 	LocalPolicy  *CompiledLocalPolicy
+	revokedPeers map[string]bool
+	revocationMu sync.RWMutex
 }
 
 // NewSamNode creates a new Agent instance secured with the 4-layer pipeline.
@@ -66,6 +68,7 @@ func NewSamNode(ctx context.Context, privKey crypto.PrivKey, hubPubKey ed25519.P
 		receivedMsgs: make(map[string][]string),
 		topics:       make(map[string]*pubsub.Topic),
 		LocalPolicy:  localPolicy,
+		revokedPeers: make(map[string]bool),
 	}
 
 	// Layer 2: Attach the Bouncer (Gater)
@@ -197,14 +200,26 @@ func (n *SamNode) listenForHubEvents(ctx context.Context) {
 			continue
 		}
 
+		if msg.ReceivedFrom != n.HubPeerID {
+			logger.Warnf("[Mesh Event] Ignored event from non-hub peer: %s", msg.ReceivedFrom)
+			continue
+		}
+
 		n.mu.Lock()
 		switch event.Type {
 		case api.MeshEvent_JOIN:
 			n.knownPeers[event.PeerId] = true
 			logger.Infof("[Mesh Event] Peer joined: %s", event.PeerId)
-		case api.MeshEvent_EXIT, api.MeshEvent_BANNED:
+		case api.MeshEvent_EXIT:
 			delete(n.knownPeers, event.PeerId)
-			logger.Infof("[Mesh Event] Peer left/banned: %s", event.PeerId)
+			logger.Infof("[Mesh Event] Peer left: %s", event.PeerId)
+		case api.MeshEvent_BANNED:
+			delete(n.knownPeers, event.PeerId)
+			logger.Infof("[Mesh Event] Peer banned: %s", event.PeerId)
+			
+			n.revocationMu.Lock()
+			n.revokedPeers[event.PeerId] = true
+			n.revocationMu.Unlock()
 		}
 		n.mu.Unlock()
 	}

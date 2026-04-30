@@ -16,6 +16,7 @@ package main
 
 import (
 	"crypto/ed25519"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -23,8 +24,11 @@ import (
 	"github.com/biscuit-auth/biscuit-go/v2"
 	"github.com/biscuit-auth/biscuit-go/v2/parser"
 	"github.com/google/sam/api"
+	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/protocol"
+	"github.com/libp2p/go-msgio"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestAuthorize(t *testing.T) {
@@ -58,6 +62,15 @@ func TestAuthorize(t *testing.T) {
 	// Bind to peer
 	err = builder.AddAuthorityFact(biscuit.Fact{Predicate: biscuit.Predicate{
 		Name: "node",
+		IDs:  []biscuit.Term{biscuit.String(dummyPeer.String())},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Add client_peer_id for replay check
+	err = builder.AddAuthorityFact(biscuit.Fact{Predicate: biscuit.Predicate{
+		Name: "client_peer_id",
 		IDs:  []biscuit.Term{biscuit.String(dummyPeer.String())},
 	}})
 	if err != nil {
@@ -196,6 +209,15 @@ attenuation:
 				t.Fatal(err)
 			}
 
+			// Add client_peer_id for replay check
+			err = builder.AddAuthorityFact(biscuit.Fact{Predicate: biscuit.Predicate{
+				Name: "client_peer_id",
+				IDs:  []biscuit.Term{biscuit.String(dummyPeer.String())},
+			}})
+			if err != nil {
+				t.Fatal(err)
+			}
+
 			tt.mintToken(t, builder)
 
 			b, err := builder.Build()
@@ -243,5 +265,90 @@ attenuation:
 				}
 			}
 		})
+	}
+}
+
+func TestRevocation(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dummyPeer := peer.ID("dummy-peer-id") // Must match mockStream.Conn().RemotePeer()
+
+	builder := biscuit.NewBuilder(priv)
+	err = builder.AddAuthorityFact(biscuit.Fact{Predicate: biscuit.Predicate{
+		Name: "node",
+		IDs:  []biscuit.Term{biscuit.String(dummyPeer.String())},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = builder.AddAuthorityFact(biscuit.Fact{Predicate: biscuit.Predicate{
+		Name: "client_peer_id",
+		IDs:  []biscuit.Term{biscuit.String(dummyPeer.String())},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	b, err := builder.Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tokenBytes, err := b.Serialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	node := &SamNode{
+		HubPublicKey: pub,
+		revokedPeers: make(map[string]bool),
+	}
+
+	// Mark as revoked
+	node.revocationMu.Lock()
+	node.revokedPeers[dummyPeer.String()] = true
+	node.revocationMu.Unlock()
+
+	pr1, pw1 := io.Pipe()
+	pr2, pw2 := io.Pipe()
+
+	serverStream := &mockStream{r: pr1, w: pw2, protocol: protocol.ID("/test/proto")}
+	
+	// Run handler in goroutine
+	go func() {
+		handler := node.WithBiscuitAuth(func(s network.Stream) {
+			t.Error("Handler should not be called for revoked peer")
+		})
+		handler(serverStream)
+	}()
+
+	// Send AuthFrame
+	writer := msgio.NewVarintWriter(pw1)
+	authFrame := &api.AuthFrame{Biscuit: tokenBytes}
+	data, _ := proto.Marshal(authFrame)
+	if err := writer.WriteMsg(data); err != nil {
+		t.Fatal(err)
+	}
+
+	// Read response
+	reader := msgio.NewVarintReaderSize(pr2, 1024*64)
+	msg, err := reader.ReadMsg()
+	if err != nil {
+		t.Fatalf("failed to read response: %v", err)
+	}
+	
+	var resp api.AuthResponse
+	if err := proto.Unmarshal(msg, &resp); err != nil {
+		t.Fatal(err)
+	}
+
+	if resp.Success {
+		t.Error("expected failure for revoked peer, got success")
+	}
+	if resp.Error != "Peer is revoked" {
+		t.Errorf("expected error 'Peer is revoked', got %q", resp.Error)
 	}
 }

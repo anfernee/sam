@@ -234,7 +234,7 @@ func (h *Hub) handleEnroll(s network.Stream) {
 		return
 	}
 
-	verifier := provider.Verifier(&oidc.Config{ClientID: aud})
+	verifier := provider.Verifier(&oidc.Config{ClientID: clientID})
 
 	token, err := verifier.Verify(context.Background(), req.Jwt)
 	if err != nil {
@@ -276,6 +276,15 @@ func (h *Hub) handleEnroll(s network.Stream) {
 		IDs:  []biscuit.Term{biscuit.String(remotePeer.String())},
 	}}); err != nil {
 		logger.Errorf("[Enroll] Failed to add node fact: %v", err)
+		h.sendEnrollResponse(s, nil, "Failed to mint biscuit", 0, nil, nil)
+		return
+	}
+
+	if err := builder.AddAuthorityFact(biscuit.Fact{Predicate: biscuit.Predicate{
+		Name: "client_peer_id",
+		IDs:  []biscuit.Term{biscuit.String(remotePeer.String())},
+	}}); err != nil {
+		logger.Errorf("[Enroll] Failed to add client_peer_id fact: %v", err)
 		h.sendEnrollResponse(s, nil, "Failed to mint biscuit", 0, nil, nil)
 		return
 	}

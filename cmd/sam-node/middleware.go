@@ -69,6 +69,17 @@ func (n *SamNode) WithBiscuitAuth(next network.StreamHandler) network.StreamHand
 
 		writer := msgio.NewVarintWriter(s)
 
+		n.revocationMu.RLock()
+		isRevoked := n.revokedPeers[remotePeer.String()]
+		n.revocationMu.RUnlock()
+		if isRevoked {
+			logger.Warnf("[Auth] Peer %s is revoked", remotePeer)
+			resp := &api.AuthResponse{Success: false, Error: "Peer is revoked"}
+			respBytes, _ := proto.Marshal(resp)
+			_ = writer.WriteMsg(respBytes)
+			return
+		}
+
 		if err := n.Authorize(authFrame.Biscuit, reqCtx); err != nil {
 			logger.Warnf("[Auth] AuthZ Denied %s: %v", remotePeer, err)
 			resp := &api.AuthResponse{Success: false, Error: err.Error()}
@@ -116,6 +127,22 @@ func (n *SamNode) Authorize(rawToken []byte, req RequestContext) error {
 			IDs:  []biscuit.Term{biscuit.String(req.Protocol)},
 		},
 	})
+
+	// Inject connection_peer_id fact for replay defense
+	authorizer.AddFact(biscuit.Fact{
+		Predicate: biscuit.Predicate{
+			Name: "connection_peer_id",
+			IDs:  []biscuit.Term{biscuit.String(req.PeerID.String())},
+		},
+	})
+
+	// Enforce client_peer_id matches connection_peer_id
+	replayCheckStr := `check if client_peer_id($id), connection_peer_id($id)`
+	replayCheck, err := parser.FromStringCheck(replayCheckStr)
+	if err != nil {
+		return fmt.Errorf("failed to parse replay check: %w", err)
+	}
+	authorizer.AddCheck(replayCheck)
 
 	// Apply Pre-compiled Local Attenuation
 	if n.LocalPolicy != nil {
