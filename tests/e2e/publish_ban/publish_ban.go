@@ -39,7 +39,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer h.Close()
+	defer func() { _ = h.Close() }()
 
 	ps, err := pubsub.NewGossipSub(ctx, h)
 	if err != nil {

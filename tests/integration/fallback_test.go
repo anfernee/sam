@@ -61,7 +61,7 @@ func TestFallbackReEnrollment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer clientHost.Close()
+	defer func() { _ = clientHost.Close() }()
 
 	// Create a dummy JWT file for fallback
 	jwtPath := filepath.Join(tmpHome, "jwt.txt")
@@ -74,15 +74,21 @@ func TestFallbackReEnrollment(t *testing.T) {
 	
 	// Bind to client peer ID
 	nodeFact, _ := parser.FromStringFact(fmt.Sprintf(`node("%s")`, clientHost.ID()))
-	builder.AddAuthorityFact(nodeFact)
+	if err := builder.AddAuthorityFact(nodeFact); err != nil {
+		t.Fatal(err)
+	}
 	
 	// Add client_peer_id fact for replay check
 	clientPeerFact, _ := parser.FromStringFact(fmt.Sprintf(`client_peer_id("%s")`, clientHost.ID()))
-	builder.AddAuthorityFact(clientPeerFact)
+	if err := builder.AddAuthorityFact(clientPeerFact); err != nil {
+		t.Fatal(err)
+	}
 	
 	// Add wildcard tool access
 	toolFact, _ := parser.FromStringFact(`allow_mcp_tool("*")`)
-	builder.AddAuthorityFact(toolFact)
+	if err := builder.AddAuthorityFact(toolFact); err != nil {
+		t.Fatal(err)
+	}
 	
 	b, _ := builder.Build()
 	
@@ -191,7 +197,7 @@ func TestFallbackReEnrollment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 
 	// 10. Send AuthFrame with token B
 	writer := msgio.NewVarintWriter(s)
