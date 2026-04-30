@@ -25,7 +25,7 @@ func TestNewKeyRing(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "test.db")
 
-	kr, err := NewKeyRing(dbPath, 24*time.Hour)
+	kr, err := NewKeyRing(dbPath, 24*time.Hour, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,7 +43,7 @@ func TestKeyRingRotate(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "test.db")
 
-	kr, err := NewKeyRing(dbPath, 24*time.Hour)
+	kr, err := NewKeyRing(dbPath, 24*time.Hour, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +72,7 @@ func TestKeyRingPersistence(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "test.db")
 
-	kr, err := NewKeyRing(dbPath, 24*time.Hour)
+	kr, err := NewKeyRing(dbPath, 24*time.Hour, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +81,7 @@ func TestKeyRingPersistence(t *testing.T) {
 	_ = kr.Close()
 
 	// Reopen
-	kr2, err := NewKeyRing(dbPath, 24*time.Hour)
+	kr2, err := NewKeyRing(dbPath, 24*time.Hour, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +96,7 @@ func TestKeyRingCleanup(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "test.db")
 
-	kr, err := NewKeyRing(dbPath, 1*time.Millisecond) // Short grace period
+	kr, err := NewKeyRing(dbPath, 1*time.Millisecond, nil) // Short grace period
 	if err != nil {
 		t.Fatal(err)
 	}

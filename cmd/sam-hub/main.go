@@ -18,6 +18,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/tls"
+	"encoding/hex"
 	"fmt"
 	"net/http"
 	"os"
@@ -147,7 +148,15 @@ func NewHub(ctx context.Context, policy *api.PolicyConfig) (*Hub, error) {
 		logger.Infof("[OIDC] Trusted issuer: %s", iss)
 	}
 
-	kr, err := NewKeyRing(keysDBPath, keyGracePeriod)
+	var initialSeed []byte
+	if biscuitHex != "" {
+		var err error
+		initialSeed, err = hex.DecodeString(biscuitHex)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode key flag: %w", err)
+		}
+	}
+	kr, err := NewKeyRing(keysDBPath, keyGracePeriod, initialSeed)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create keyring: %w", err)
 	}

@@ -15,6 +15,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/json"
@@ -41,7 +42,7 @@ type KeyRing struct {
 }
 
 // NewKeyRing opens or creates a BoltDB file to store the keyring.
-func NewKeyRing(dbPath string, gracePeriod time.Duration) (*KeyRing, error) {
+func NewKeyRing(dbPath string, gracePeriod time.Duration, initialSeed []byte) (*KeyRing, error) {
 	db, err := bbolt.Open(dbPath, 0600, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open db: %w", err)
@@ -63,8 +64,29 @@ func NewKeyRing(dbPath string, gracePeriod time.Duration) (*KeyRing, error) {
 		return nil, fmt.Errorf("failed to load keyring: %w", err)
 	}
 
-	// Generate initial key if empty
-	if len(kr.Current.Private) == 0 {
+	if len(initialSeed) > 0 {
+		if len(initialSeed) != ed25519.SeedSize {
+			_ = db.Close()
+			return nil, fmt.Errorf("invalid seed size: %d, expected %d", len(initialSeed), ed25519.SeedSize)
+		}
+		priv := ed25519.NewKeyFromSeed(initialSeed)
+		pub := priv.Public().(ed25519.PublicKey)
+		
+		if !bytes.Equal(kr.Current.Private, priv) {
+			if len(kr.Current.Private) > 0 {
+				kr.Current.Expiration = time.Now().Add(gracePeriod)
+				kr.Previous = append(kr.Previous, kr.Current)
+			}
+			kr.Current = KeyPair{
+				Private: priv,
+				Public:  pub,
+			}
+			if err := kr.save(); err != nil {
+				_ = db.Close()
+				return nil, fmt.Errorf("failed to save initial key: %w", err)
+			}
+		}
+	} else if len(kr.Current.Private) == 0 {
 		if err := kr.rotate(gracePeriod); err != nil {
 			_ = db.Close()
 			return nil, fmt.Errorf("failed to generate initial key: %w", err)
