@@ -77,7 +77,11 @@ func (n *SamNode) WithBiscuitAuth(next network.StreamHandler) network.StreamHand
 		if _, isRevoked := n.revokedPeers.Get(remotePeer.String()); isRevoked {
 			logger.Warnf("[Auth] Peer %s is revoked", remotePeer)
 			resp := &api.AuthResponse{Success: false, Error: "Peer is revoked"}
-			respBytes, _ := proto.Marshal(resp)
+			respBytes, err := proto.Marshal(resp)
+			if err != nil {
+				logger.Errorf("[Auth] Failed to marshal revocation response: %v", err)
+				return
+			}
 			_ = writer.WriteMsg(respBytes)
 			return
 		}
@@ -90,7 +94,11 @@ func (n *SamNode) WithBiscuitAuth(next network.StreamHandler) network.StreamHand
 			logger.Infof("[Auth] Token cache hit for %s", remotePeer)
 			// Valid
 			resp := &api.AuthResponse{Success: true}
-			respBytes, _ := proto.Marshal(resp)
+			respBytes, err := proto.Marshal(resp)
+			if err != nil {
+				logger.Errorf("[Auth] Failed to marshal ACK response: %v", err)
+				return
+			}
 			if err := writer.WriteMsg(respBytes); err != nil {
 				logger.Errorf("[Auth] Failed to write ACK to %s: %v", remotePeer, err)
 				return
@@ -118,7 +126,7 @@ func (n *SamNode) WithBiscuitAuth(next network.StreamHandler) network.StreamHand
 			logger.Infof("[Auth] All keys failed, triggering re-enrollment fallback for %s", remotePeer)
 			var jwtStr string
 			var err error
-			
+
 			if tokenURLFlag != "" {
 				jwtStr, err = n.FetchJWT(context.Background(), tokenURLFlag, clientIDFlag, clientSecretFlag)
 				if err != nil {
