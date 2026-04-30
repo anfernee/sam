@@ -227,7 +227,8 @@ func (n *SamNode) listenForHubEvents(ctx context.Context) {
 			continue
 		}
 
-		if msg.ReceivedFrom != n.HubPeerID {
+		// use the original author not the one that just relay the message
+		if msg.GetFrom() != n.HubPeerID {
 			logger.Warnf("[Mesh Event] Ignored event from non-hub peer: %s", msg.ReceivedFrom)
 			continue
 		}
