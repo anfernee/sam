@@ -26,6 +26,7 @@ import (
 
 	"github.com/biscuit-auth/biscuit-go/v2"
 	"github.com/biscuit-auth/biscuit-go/v2/parser"
+	"golang.org/x/time/rate"
 	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/sam/api"
@@ -39,6 +40,7 @@ import (
 	libp2ptls "github.com/libp2p/go-libp2p/p2p/security/tls"
 	libp2pquic "github.com/libp2p/go-libp2p/p2p/transport/quic"
 	"github.com/libp2p/go-msgio"
+	"github.com/libp2p/go-libp2p/p2p/net/connmgr"
 
 	"github.com/libp2p/go-libp2p/p2p/transport/tcp"
 	"github.com/spf13/cobra"
@@ -47,6 +49,10 @@ import (
 
 const (
 	GracePeriod = 60 * time.Second
+
+	// Rate limiting defaults
+	EnrollRateLimit = 10
+	EnrollBurst     = 20
 )
 
 var (
@@ -76,11 +82,19 @@ type Hub struct {
 	EventTopic *pubsub.Topic
 	gater      *hubConnGate
 	Policy     *api.PolicyConfig
+	limiter    *rate.Limiter
 }
 
 // NewHub starts a host supporting both QUIC and TCP (with TLS 1.3)
 func NewHub(ctx context.Context, policy *api.PolicyConfig) (*Hub, error) {
 	gater := newHubConnGate()
+	
+	// Connection Manager for DoS protection
+	cm, err := connmgr.NewConnManager(100, 400, connmgr.WithGracePeriod(time.Minute))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create connection manager: %w", err)
+	}
+
 	// Multi-transport setup for firewall traversal
 	h, err := libp2p.New(
 		libp2p.Transport(libp2pquic.NewTransport),
@@ -91,6 +105,7 @@ func NewHub(ctx context.Context, policy *api.PolicyConfig) (*Hub, error) {
 		libp2p.EnableRelayService(),
 		libp2p.ConnectionGater(gater),
 		libp2p.EnableNATService(),
+		libp2p.ConnectionManager(cm),
 	)
 	if err != nil {
 		return nil, err
@@ -145,6 +160,7 @@ func NewHub(ctx context.Context, policy *api.PolicyConfig) (*Hub, error) {
 		KeyRing:   kr,
 		MeshID:    meshName,
 		Policy:    policy,
+		limiter:   rate.NewLimiter(rate.Limit(EnrollRateLimit), EnrollBurst),
 	}
 
 	h.Network().Notify(&notifier{hub: hub})
@@ -166,6 +182,13 @@ func (h *Hub) handleEnroll(s network.Stream) {
 		_ = s.Close()
 	}()
 	remotePeer := s.Conn().RemotePeer()
+	
+	if !h.limiter.Allow() {
+		logger.Warnf("[Enroll] Rate limit exceeded for %s, dropping connection", remotePeer)
+		_ = s.Reset()
+		return
+	}
+
 	logger.Infof("[Enroll] New enrollment request from %s", remotePeer)
 
 	reader := msgio.NewVarintReaderSize(s, 1024*64)

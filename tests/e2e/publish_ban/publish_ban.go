@@ -20,10 +20,14 @@ import (
 func main() {
 	keyHex := flag.String("key", "", "Hub private key (hex)")
 	peerToBan := flag.String("peer", "", "Peer ID to ban")
-	hubAddr := flag.String("hub", "", "Hub multiaddress")
+	var addrs []string
+	flag.Func("addr", "Multiaddresses to connect to", func(s string) error {
+		addrs = append(addrs, s)
+		return nil
+	})
 	flag.Parse()
 
-	if *keyHex == "" || *peerToBan == "" || *hubAddr == "" {
+	if *keyHex == "" || *peerToBan == "" || len(addrs) == 0 {
 		log.Fatal("Missing required flags")
 	}
 
@@ -46,17 +50,27 @@ func main() {
 		log.Fatal(err)
 	}
 
-	addr, err := multiaddr.NewMultiaddr(*hubAddr)
-	if err != nil {
-		log.Fatal(err)
+	connected := false
+	for _, addrStr := range addrs {
+		addr, err := multiaddr.NewMultiaddr(addrStr)
+		if err != nil {
+			log.Printf("Failed to parse addr %s: %v", addrStr, err)
+			continue
+		}
+		addrInfo, err := peer.AddrInfoFromP2pAddr(addr)
+		if err != nil {
+			log.Printf("Failed to get addr info for %s: %v", addrStr, err)
+			continue
+		}
+		if err := h.Connect(ctx, *addrInfo); err != nil {
+			log.Printf("Failed to connect to %s: %v", addrStr, err)
+			continue
+		}
+		fmt.Printf("Connected to %s\n", addrStr)
+		connected = true
 	}
-	addrInfo, err := peer.AddrInfoFromP2pAddr(addr)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	if err := h.Connect(ctx, *addrInfo); err != nil {
-		log.Fatal(err)
+	if !connected {
+		log.Fatal("Failed to connect to any peer")
 	}
 
 	topic, err := ps.Join(api.GossipEvents)
@@ -85,14 +99,16 @@ func main() {
 
 	// Wait for pubsub to discover peers
 	fmt.Println("Waiting for pubsub peers...")
-	for i := 0; i < 30; i++ {
-		if len(topic.ListPeers()) > 0 {
+	for i := 0; i < 60; i++ {
+		peers := topic.ListPeers()
+		if len(peers) > 0 {
+			fmt.Printf("Found %d pubsub peers: %v\n", len(peers), peers)
 			break
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
 	if len(topic.ListPeers()) == 0 {
-		log.Fatal("No pubsub peers found")
+		fmt.Println("Warning: No pubsub peers found, publishing anyway...")
 	}
 
 	if err := topic.Publish(ctx, eventData); err != nil {

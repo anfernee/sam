@@ -51,6 +51,12 @@ func (n *SamNode) WithBiscuitAuth(next network.StreamHandler) network.StreamHand
 		}()
 		remotePeer := s.Conn().RemotePeer()
 
+		if !n.rateLimiter.Allow(remotePeer.String()) {
+			logger.Warnf("[Auth] Rate limit exceeded for %s, dropping connection", remotePeer)
+			_ = s.Reset()
+			return
+		}
+
 		// Read AuthFrame
 		reader := msgio.NewVarintReaderSize(s, 1024*64)
 		msg, err := reader.ReadMsg()

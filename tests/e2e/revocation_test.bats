@@ -51,6 +51,9 @@ teardown() {
   [[ "$status" -eq 0 ]]
   local node1_name="${MESH_PREFIX}-node-1"
   mesh_wait_for_log "${node1_name}" "SAM Node Online" 20
+  
+  local node1_peer_id
+  node1_peer_id=$(docker logs "${node1_name}" 2>&1 | grep -oE '12D3Koo[a-zA-Z0-9]+' | head -n 1)
 
   # Start Node 2
   run mesh_start_node 2
@@ -77,7 +80,8 @@ teardown() {
     go run tests/e2e/publish_ban/publish_ban.go \
       --key "${hub_key}" \
       --peer "${node2_peer_id}" \
-      --hub "/dns4/sam-hub/tcp/4002/p2p/${hub_peer_id}"
+      --addr "/dns4/sam-hub/tcp/4002/p2p/${hub_peer_id}" \
+      --addr "/dns4/sam-node-1/tcp/5002/p2p/${node1_peer_id}"
   
   echo "publish_ban output: $output"
   [[ "$status" -eq 0 ]]
@@ -85,6 +89,10 @@ teardown() {
 
   # Verify Node 1 receives the ban event and logs it
   run mesh_wait_for_log "${node1_name}" "Peer banned: ${node2_peer_id}" 20
+  if [[ "$status" -ne 0 ]]; then
+    echo "Node 1 logs:"
+    docker logs "${node1_name}"
+  fi
   [[ "$status" -eq 0 ]]
 
   # Verify Node 1 disconnects from Node 2

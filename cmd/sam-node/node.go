@@ -29,6 +29,7 @@ import (
 	"github.com/google/sam/api"
 	lru "github.com/hashicorp/golang-lru/v2"
 	"github.com/libp2p/go-libp2p"
+	"github.com/libp2p/go-libp2p/p2p/net/connmgr"
 	dht "github.com/libp2p/go-libp2p-kad-dht"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	"github.com/libp2p/go-libp2p/core/crypto"
@@ -68,6 +69,7 @@ type SamNode struct {
 	verificationCache *lru.Cache[string, bool]
 	trustedKeys       []TrustedKey
 	keysMu            sync.RWMutex
+	rateLimiter       *PeerRateLimiter
 }
 
 // NewSamNode creates a new Agent instance secured with the 4-layer pipeline.
@@ -87,6 +89,10 @@ func NewSamNode(ctx context.Context, privKey crypto.PrivKey, hubPubKey ed25519.P
 	}
 
 	var err error
+	node.rateLimiter, err = NewPeerRateLimiter(1000)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create rate limiter: %w", err)
+	}
 	node.revokedPeers, err = lru.New[string, int64](10000)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create revocation cache: %w", err)
@@ -108,6 +114,11 @@ func NewSamNode(ctx context.Context, privKey crypto.PrivKey, hubPubKey ed25519.P
 		}
 	}
 
+	cm, err := connmgr.NewConnManager(100, 400, connmgr.WithGracePeriod(time.Minute))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create connection manager: %w", err)
+	}
+
 	// Layer 1: Establish FIPS-compliant Transports & NAT Services
 	opts := []libp2p.Option{
 		libp2p.Identity(privKey),
@@ -117,6 +128,7 @@ func NewSamNode(ctx context.Context, privKey crypto.PrivKey, hubPubKey ed25519.P
 		libp2p.ConnectionGater(gater),
 		libp2p.ListenAddrStrings(listenAddrs...),
 		libp2p.EnableNATService(),
+		libp2p.ConnectionManager(cm),
 	}
 
 	// If we have a Hub, configure it as our static fallback relay for NAT hole-punching
@@ -224,6 +236,12 @@ func (n *SamNode) listenForHubEvents(ctx context.Context) {
 		if err != nil {
 			return
 		}
+
+		if !n.rateLimiter.Allow(msg.ReceivedFrom.String()) {
+			logger.Warnf("[Mesh Event] Rate limit exceeded for %s, dropping message", msg.ReceivedFrom)
+			continue
+		}
+
 		var event api.MeshEvent
 		if err := proto.Unmarshal(msg.Data, &event); err != nil {
 			logger.Errorf("[Mesh Event] Failed to unmarshal event from %s: %v", msg.ReceivedFrom, err)

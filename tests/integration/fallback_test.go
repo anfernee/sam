@@ -31,6 +31,7 @@ import (
 	"github.com/google/sam/api"
 	"github.com/libp2p/go-libp2p"
 	dht "github.com/libp2p/go-libp2p-kad-dht"
+	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/protocol"
@@ -39,52 +40,42 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+func init() {
+	// Force initialization of parser to avoid data race in tests
+	_, _ = parser.FromStringFact(`dummy("fact")`)
+}
+
 func TestFallbackReEnrollment(t *testing.T) {
 	nodeBin := buildBinary(t, "./cmd/sam-node")
 
-	// 1. Generate Keys
+	// 1. Generate Keys for Biscuit
 	pubA, _, _ := ed25519.GenerateKey(nil)
 	pubB, privB, _ := ed25519.GenerateKey(nil)
 
-	// 2. Start Mock Hub with dynamic key response
-	// First call returns Key A, subsequent calls return Key B
-	_, hubAddr := startMockHubDynamic(t, pubA, pubB)
-
-	tmpHome := t.TempDir()
-	env := append(os.Environ(),
-		"HOME="+tmpHome,
-		"XDG_CONFIG_HOME="+filepath.Join(tmpHome, ".config"),
-	)
-
-	// 4. Start a mock libp2p client in the test
-	clientHost, err := libp2p.New(libp2p.ListenAddrStrings("/ip4/127.0.0.1/tcp/0"))
+	// 2. Generate Client Peer Identity BEFORE starting any libp2p hosts
+	// This avoids data race with FromStringFact later!
+	clientPriv, clientPub, err := crypto.GenerateKeyPair(crypto.Ed25519, -1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = clientHost.Close() }()
-
-	// Create a dummy JWT file for fallback
-	jwtPath := filepath.Join(tmpHome, "jwt.txt")
-	if err := os.WriteFile(jwtPath, []byte("dummy-jwt"), 0644); err != nil {
+	clientID, err := peer.IDFromPublicKey(clientPub)
+	if err != nil {
 		t.Fatal(err)
 	}
 
-	// 5. Create Biscuit token signed by Key B
+	// 3. Create Biscuit token signed by Key B (using pre-computed clientID)
 	builder := biscuit.NewBuilder(privB)
 	
-	// Bind to client peer ID
-	nodeFact, _ := parser.FromStringFact(fmt.Sprintf(`node("%s")`, clientHost.ID()))
+	nodeFact, _ := parser.FromStringFact(fmt.Sprintf(`node("%s")`, clientID))
 	if err := builder.AddAuthorityFact(nodeFact); err != nil {
 		t.Fatal(err)
 	}
 	
-	// Add client_peer_id fact for replay check
-	clientPeerFact, _ := parser.FromStringFact(fmt.Sprintf(`client_peer_id("%s")`, clientHost.ID()))
+	clientPeerFact, _ := parser.FromStringFact(fmt.Sprintf(`client_peer_id("%s")`, clientID))
 	if err := builder.AddAuthorityFact(clientPeerFact); err != nil {
 		t.Fatal(err)
 	}
 	
-	// Add wildcard tool access
 	toolFact, _ := parser.FromStringFact(`allow_mcp_tool("*")`)
 	if err := builder.AddAuthorityFact(toolFact); err != nil {
 		t.Fatal(err)
@@ -105,8 +96,22 @@ func TestFallbackReEnrollment(t *testing.T) {
 	
 	tokenBytes, _ := b.Serialize()
 
-	// 6. Run Node in background
-	// It will enroll on startup and get Key A!
+	// 4. Start Mock Hub with dynamic key response
+	_, hubAddr := startMockHubDynamic(t, pubA, pubB)
+
+	tmpHome := t.TempDir()
+	env := append(os.Environ(),
+		"HOME="+tmpHome,
+		"XDG_CONFIG_HOME="+filepath.Join(tmpHome, ".config"),
+	)
+
+	// Create a dummy JWT file for fallback
+	jwtPath := filepath.Join(tmpHome, "jwt.txt")
+	if err := os.WriteFile(jwtPath, []byte("dummy-jwt"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// 5. Run Node in background
 	cmd := exec.Command(nodeBin, "run", "--hub", hubAddr, "--listen", "/ip4/127.0.0.1/tcp/0", "--jwt-path", jwtPath)
 	cmd.Dir = repoRoot(t)
 	cmd.Env = env
@@ -137,7 +142,7 @@ func TestFallbackReEnrollment(t *testing.T) {
 		t.Fatalf("Node failed to start or didn't print address in time.\nOutput:\n%s", out)
 	}
 
-	// 7. Extract Node address
+	// 6. Extract Node address
 	var nodeAddr string
 	lines := strings.Split(out, "\n")
 	for _, line := range lines {
@@ -178,7 +183,16 @@ func TestFallbackReEnrollment(t *testing.T) {
 
 	nodeFullAddr := nodeAddr + "/p2p/" + nodePeerID
 
-	// 8. Connect to Node via libp2p
+	// 7. Start client host with the pre-generated identity
+	clientHost, err := libp2p.New(
+		libp2p.ListenAddrStrings("/ip4/127.0.0.1/tcp/0"),
+		libp2p.Identity(clientPriv),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = clientHost.Close() }()
+
 	targetAddr, err := multiaddr.NewMultiaddr(nodeFullAddr)
 	if err != nil {
 		t.Fatal(err)
@@ -192,14 +206,14 @@ func TestFallbackReEnrollment(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// 9. Connect to Node via libp2p on api.MCPProtocolID
+	// 8. Connect to Node via libp2p on api.MCPProtocolID
 	s, err := clientHost.NewStream(context.Background(), targetInfo.ID, api.MCPProtocolID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = s.Close() }()
 
-	// 10. Send AuthFrame with token B
+	// 9. Send AuthFrame with token B
 	writer := msgio.NewVarintWriter(s)
 	authFrame := &api.AuthFrame{Biscuit: tokenBytes}
 	authFrameBytes, _ := proto.Marshal(authFrame)
@@ -207,7 +221,7 @@ func TestFallbackReEnrollment(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// 11. Read response
+	// 10. Read response
 	reader := msgio.NewVarintReaderSize(s, 1024*64)
 	respMsg, err := reader.ReadMsg()
 	if err != nil {
