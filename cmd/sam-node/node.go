@@ -51,20 +51,20 @@ type TrustedKey struct {
 }
 
 type SamNode struct {
-	Host         host.Host
-	DHT          *dht.IpfsDHT
-	PubSub       *pubsub.PubSub
-	Store        *Store
-	HubPeerID    peer.ID
-	knownPeers   map[string]bool
-	receivedMsgs map[string][]string
-	topics       map[string]*pubsub.Topic
-	mu           sync.Mutex
-	LocalPolicy  *CompiledLocalPolicy
-	revokedPeers *lru.Cache[string, int64]
+	Host              host.Host
+	DHT               *dht.IpfsDHT
+	PubSub            *pubsub.PubSub
+	Store             *Store
+	HubPeerID         peer.ID
+	knownPeers        map[string]bool
+	receivedMsgs      map[string][]string
+	topics            map[string]*pubsub.Topic
+	mu                sync.Mutex
+	LocalPolicy       *CompiledLocalPolicy
+	revokedPeers      *lru.Cache[string, int64]
 	verificationCache *lru.Cache[string, bool]
-	trustedKeys  []TrustedKey
-	keysMu       sync.RWMutex
+	trustedKeys       []TrustedKey
+	keysMu            sync.RWMutex
 }
 
 // NewSamNode creates a new Agent instance secured with the 4-layer pipeline.
@@ -248,8 +248,12 @@ func (n *SamNode) listenForHubEvents(ctx context.Context) {
 		case api.MeshEvent_BANNED:
 			delete(n.knownPeers, event.PeerId)
 			logger.Infof("[Mesh Event] Peer banned: %s", event.PeerId)
-			
+
 			n.revokedPeers.Add(event.PeerId, event.Timestamp)
+			// close all streams from this peer
+			if p, err := peer.Decode(event.PeerId); err == nil {
+				_ = n.Host.Network().ClosePeer(p)
+			}
 		case api.MeshEvent_KEY_ROTATION:
 			logger.Infof("[Mesh Event] Key rotation received")
 			n.keysMu.Lock()
