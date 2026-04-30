@@ -16,6 +16,8 @@ package main
 
 import (
 	"crypto/ed25519"
+	"crypto/sha256"
+	"encoding/hex"
 	"io"
 	"os"
 	"path/filepath"
@@ -393,5 +395,107 @@ func TestVerifyEvent(t *testing.T) {
 	event.Signature = nil
 	if node.verifyEvent(event) {
 		t.Error("Expected event verification to fail for missing signature, got true")
+	}
+}
+
+func TestHandleAuthHandshakeCache(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dummyPeer := peer.ID("dummy-peer-id")
+
+	builder := biscuit.NewBuilder(priv)
+	err = builder.AddAuthorityFact(biscuit.Fact{Predicate: biscuit.Predicate{
+		Name: "node",
+		IDs:  []biscuit.Term{biscuit.String(dummyPeer.String())},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	b, err := builder.Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tokenBytes, err := b.Serialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cache, _ := lru.New[string, bool](10)
+	
+	dir := t.TempDir()
+	store, err := NewStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+
+	node := &SamNode{
+		trustedKeys:       []TrustedKey{{Key: pub, ReceivedAt: time.Now()}},
+		verificationCache: cache,
+		Store:             store,
+	}
+
+	pr1, pw1 := io.Pipe()
+
+	serverStream := &mockStream{r: pr1, w: io.Discard, protocol: protocol.ID("/sam/auth/1.0.0")}
+	
+	go func() {
+		node.HandleAuthHandshake(serverStream)
+	}()
+
+	writer := msgio.NewVarintWriter(pw1)
+	envelope := &api.AuthEnvelope{Biscuit: tokenBytes}
+	envelopeBytes, _ := proto.Marshal(envelope)
+	if err := writer.WriteMsg(envelopeBytes); err != nil {
+		t.Fatal(err)
+	}
+
+	time.Sleep(1 * time.Second)
+	
+	_, err = store.GetVerifiedIdentity(dummyPeer)
+	if err != nil {
+		t.Fatalf("Expected identity to be saved, got err: %v", err)
+	}
+
+	tokenHash := sha256.Sum256(tokenBytes)
+	hashStr := hex.EncodeToString(tokenHash[:])
+	
+	if valid, ok := cache.Get(hashStr); !ok || !valid {
+		t.Fatal("Expected token to be in verification cache")
+	}
+
+	// Now corrupt keys and try again.
+	node.keysMu.Lock()
+	node.trustedKeys = []TrustedKey{{Key: []byte("invalid-key"), ReceivedAt: time.Now()}}
+	node.keysMu.Unlock()
+
+	dir2 := t.TempDir()
+	store2, _ := NewStore(dir2)
+	defer func() { _ = store2.Close() }()
+	
+	node.Store = store2
+	
+	pr5, pw5 := io.Pipe()
+	serverStream3 := &mockStream{r: pr5, w: io.Discard, protocol: protocol.ID("/sam/auth/1.0.0")}
+
+	go func() {
+		node.HandleAuthHandshake(serverStream3)
+	}()
+
+	writer3 := msgio.NewVarintWriter(pw5)
+	if err := writer3.WriteMsg(envelopeBytes); err != nil {
+		t.Fatal(err)
+	}
+
+	time.Sleep(1 * time.Second)
+	
+	_, err = store2.GetVerifiedIdentity(dummyPeer)
+	if err != nil {
+		t.Fatalf("Expected identity to be saved via cache hit, got err: %v", err)
 	}
 }

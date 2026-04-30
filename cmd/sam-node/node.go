@@ -17,12 +17,15 @@ package main
 import (
 	"context"
 	"crypto/ed25519"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"sync"
 
 	"time"
 
 	"github.com/biscuit-auth/biscuit-go/v2"
+	"github.com/biscuit-auth/biscuit-go/v2/parser"
 	"github.com/google/sam/api"
 	lru "github.com/hashicorp/golang-lru/v2"
 	"github.com/libp2p/go-libp2p"
@@ -238,6 +241,12 @@ func (n *SamNode) listenForHubEvents(ctx context.Context) {
 			continue
 		}
 
+		// Freshness check: reject events older than 5 minutes to prevent replay attacks
+		if time.Since(time.Unix(event.Timestamp, 0)) > 5*time.Minute {
+			logger.Warnf("[Mesh Event] Dropping stale event from %s (timestamp: %d)", msg.ReceivedFrom, event.Timestamp)
+			continue
+		}
+
 		n.mu.Lock()
 		switch event.Type {
 		case api.MeshEvent_JOIN:
@@ -414,6 +423,16 @@ func (n *SamNode) HandleAuthHandshake(s network.Stream) {
 		return
 	}
 
+	// Check verification cache
+	tokenHash := sha256.Sum256(exchange.Biscuit)
+	hashStr := hex.EncodeToString(tokenHash[:])
+
+	cacheHit := false
+	if valid, ok := n.verificationCache.Get(hashStr); ok && valid {
+		logger.Infof("[AuthN] Token cache hit for %s", remotePeer)
+		cacheHit = true
+	}
+
 	// 2. Unmarshal and verify token format
 	b, err := biscuit.Unmarshal(exchange.Biscuit)
 	if err != nil {
@@ -421,20 +440,38 @@ func (n *SamNode) HandleAuthHandshake(s network.Stream) {
 		return
 	}
 
-	// 3. Verify signature chain against the trusted Hub keys.
-	n.keysMu.RLock()
-	keys := n.trustedKeys
-	n.keysMu.RUnlock()
+	authorized := false
+	if cacheHit {
+		authorized = true
+	} else {
+		// 3. Verify signature chain against the trusted Hub keys.
+		n.keysMu.RLock()
+		keys := n.trustedKeys
+		n.keysMu.RUnlock()
 
-	var authorized bool
-	for _, tk := range keys {
-		authorizer, err := b.Authorizer(tk.Key)
-		if err != nil {
-			continue
+		for _, tk := range keys {
+			authorizer, err := b.Authorizer(tk.Key)
+			if err != nil {
+				continue
+			}
+
+			// Admission only requires a valid signature, so allow if true
+			rule, err := parser.FromStringPolicy("allow if true")
+			if err != nil {
+				logger.Errorf("[AuthN] Failed to parse rule: %v", err)
+				continue
+			}
+			authorizer.AddPolicy(rule)
+
+			if err := authorizer.Authorize(); err == nil {
+				authorized = true
+				break
+			}
 		}
-		if err := authorizer.Authorize(); err == nil {
-			authorized = true
-			break
+
+		if authorized {
+			// Cache successful verification
+			n.verificationCache.Add(hashStr, true)
 		}
 	}
 

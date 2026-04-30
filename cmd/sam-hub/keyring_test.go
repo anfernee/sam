@@ -29,7 +29,7 @@ func TestNewKeyRing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer kr.Close()
+	defer func() { _ = kr.Close() }()
 
 	if len(kr.Current.Private) == 0 {
 		t.Error("Expected current private key to be initialized")
@@ -47,7 +47,7 @@ func TestKeyRingRotate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer kr.Close()
+	defer func() { _ = kr.Close() }()
 
 	oldPub := kr.Current.Public
 
@@ -78,14 +78,14 @@ func TestKeyRingPersistence(t *testing.T) {
 	}
 
 	currentPub := kr.Current.Public
-	kr.Close()
+	_ = kr.Close()
 
 	// Reopen
 	kr2, err := NewKeyRing(dbPath, 24*time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer kr2.Close()
+	defer func() { _ = kr2.Close() }()
 
 	if !bytes.Equal(kr2.Current.Public, currentPub) {
 		t.Error("Expected persisted public key to match original")
@@ -100,7 +100,7 @@ func TestKeyRingCleanup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer kr.Close()
+	defer func() { _ = kr.Close() }()
 
 	oldPub := kr.Current.Public
 
