@@ -3,8 +3,6 @@ package integration_test
 import (
 	"context"
 	"encoding/json"
-	"net"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -21,7 +19,7 @@ func startBackgroundNode(t *testing.T, nodeBin string, hubAddr string, homeDir s
 		"HOME="+homeDir,
 		"XDG_CONFIG_HOME="+filepath.Join(homeDir, ".config"),
 	)
-	allArgs := append([]string{"run", "--hub", hubAddr, "--jwt", "test-jwt"}, args...)
+	allArgs := append([]string{"run", "--hub", hubAddr, "--jwt", "test-jwt", "--mcp-addr", "127.0.0.1:0"}, args...)
 	cmd := exec.Command(nodeBin, allArgs...)
 	cmd.Env = env
 
@@ -48,25 +46,36 @@ func startBackgroundNode(t *testing.T, nodeBin string, hubAddr string, homeDir s
 	return cmd
 }
 
-func callMCP(t *testing.T, socketPath string, toolName string, params map[string]any) string {
+func waitForMCPAddr(t *testing.T, logPath string) string {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		data, _ := os.ReadFile(logPath)
+		lines := strings.Split(string(data), "\n")
+		for _, line := range lines {
+			if strings.Contains(line, "Starting MCP server on TCP address ") {
+				parts := strings.Split(line, "Starting MCP server on TCP address ")
+				if len(parts) > 1 {
+					return strings.TrimSpace(parts[1])
+				}
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatalf("timeout waiting for MCP addr in log: %s", logPath)
+	return ""
+}
+
+func callMCP(t *testing.T, mcpAddr string, toolName string, params map[string]any) string {
 	t.Helper()
 	ctx := context.Background()
-	
-	oldTransport := http.DefaultClient.Transport
-	defer func() { http.DefaultClient.Transport = oldTransport }()
-	
-	http.DefaultClient.Transport = &http.Transport{
-		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			return net.Dial("unix", socketPath)
-		},
-	}
-	
+
 	client := mcp.NewClient(&mcp.Implementation{
 		Name:    "test-client",
 		Version: "0.1.0",
 	}, nil)
-	
-	session, err := client.Connect(ctx, &mcp.StreamableClientTransport{Endpoint: "http://localhost/"}, nil)
+
+	session, err := client.Connect(ctx, &mcp.SSEClientTransport{Endpoint: "http://" + mcpAddr + "/mcp/events"}, nil)
 	if err != nil {
 		t.Fatalf("Failed to connect: %v", err)
 	}
@@ -75,7 +84,7 @@ func callMCP(t *testing.T, socketPath string, toolName string, params map[string
 			t.Logf("failed to close session: %v", err)
 		}
 	}()
-	
+
 	result, err := session.CallTool(ctx, &mcp.CallToolParams{
 		Name:      toolName,
 		Arguments: params,
@@ -83,7 +92,7 @@ func callMCP(t *testing.T, socketPath string, toolName string, params map[string
 	if err != nil {
 		t.Fatalf("CallTool failed: %v", err)
 	}
-	
+
 	for _, content := range result.Content {
 		if textContent, ok := content.(*mcp.TextContent); ok {
 			return textContent.Text
@@ -126,29 +135,17 @@ func TestCatalogRoutingAndFailover(t *testing.T) {
 	nodeBin := buildBinary(t, "./cmd/sam-node")
 	_, hubAddr := startMockLibp2pHub(t)
 
-	scratchDir := filepath.Join(repoRoot(t), "tests", "integration", "scratch")
-	_ = os.RemoveAll(scratchDir) // Clear old logs
-	
-	homeA := filepath.Join(scratchDir, "homeA")
-	homeB := filepath.Join(scratchDir, "homeB")
-	homeC := filepath.Join(scratchDir, "homeC")
-
-	if err := os.MkdirAll(homeA, 0755); err != nil {
-		t.Fatalf("failed to create homeA: %v", err)
-	}
-	if err := os.MkdirAll(homeB, 0755); err != nil {
-		t.Fatalf("failed to create homeB: %v", err)
-	}
-	if err := os.MkdirAll(homeC, 0755); err != nil {
-		t.Fatalf("failed to create homeC: %v", err)
-	}
-
-	socketPathA := filepath.Join(homeA, ".config", "sam-mesh", "mcp.sock")
+	homeA := t.TempDir()
+	homeB := t.TempDir()
+	homeC := t.TempDir()
 
 	// Start Node A (Client)
 	t.Log("Starting Node A...")
 	_ = startBackgroundNode(t, nodeBin, hubAddr, homeA, "--listen", "/ip4/127.0.0.1/udp/0/quic-v1", "--listen", "/ip4/127.0.0.1/tcp/0", "--discovery-interval", "100ms")
 	t.Log("Node A started.")
+
+	// Wait for Node A to start and get its MCP address
+	mcpAddrA := waitForMCPAddr(t, filepath.Join(homeA, "node.log"))
 
 	// Start Node B (Provider 1)
 	t.Log("Starting Node B...")
@@ -163,35 +160,25 @@ func TestCatalogRoutingAndFailover(t *testing.T) {
 	// Wait for Node B and C to start and get their addresses
 	addrB := waitForPeerInfoInLog(t, filepath.Join(homeB, "node.log"))
 	addrC := waitForPeerInfoInLog(t, filepath.Join(homeC, "node.log"))
-	
+
 	// Force Node A to connect to Node B and Node C
-	callMCP(t, socketPathA, "connect_peer", map[string]any{"peer_addr": addrB})
-	callMCP(t, socketPathA, "connect_peer", map[string]any{"peer_addr": addrC})
+	callMCP(t, mcpAddrA, "connect_peer", map[string]any{"peer_addr": addrB})
+	callMCP(t, mcpAddrA, "connect_peer", map[string]any{"peer_addr": addrC})
 
 	// Wait for them to discover each other and publish catalog by polling get_mesh_info
 	t.Log("Polling for discovery...")
 	deadline := time.Now().Add(2 * time.Second)
 	var connected bool
 
-
-	oldTransport := http.DefaultClient.Transport
-	defer func() { http.DefaultClient.Transport = oldTransport }()
-	
-	http.DefaultClient.Transport = &http.Transport{
-		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			return net.Dial("unix", socketPathA)
-		},
-	}
-
 	for time.Now().Before(deadline) {
 		client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "0.1.0"}, nil)
-		session, err := client.Connect(context.Background(), &mcp.StreamableClientTransport{Endpoint: "http://localhost/"}, nil)
+		session, err := client.Connect(context.Background(), &mcp.SSEClientTransport{Endpoint: "http://" + mcpAddrA + "/mcp/events"}, nil)
 		if err != nil {
 			t.Logf("Poll: failed to connect: %v", err)
 			time.Sleep(500 * time.Millisecond)
 			continue
 		}
-		
+
 		result, err := session.CallTool(context.Background(), &mcp.CallToolParams{Name: "get_mesh_info", Arguments: map[string]any{}})
 		if closeErr := session.Close(); closeErr != nil {
 			t.Logf("Poll: failed to close session: %v", closeErr)
@@ -201,7 +188,7 @@ func TestCatalogRoutingAndFailover(t *testing.T) {
 			time.Sleep(500 * time.Millisecond)
 			continue
 		}
-		
+
 		var text string
 		for _, content := range result.Content {
 			if textContent, ok := content.(*mcp.TextContent); ok {
@@ -233,7 +220,7 @@ func TestCatalogRoutingAndFailover(t *testing.T) {
 		t.Fatalf("failed to discover peers (Hub + 2 nodes) in time")
 	}
 
-	respData := callMCP(t, socketPathA, "send_message", map[string]any{"peer_id": "target-peer", "message": "hello"})
+	respData := callMCP(t, mcpAddrA, "send_message", map[string]any{"peer_id": "target-peer", "message": "hello"})
 	t.Logf("First call response: %s", respData)
 
 	// Now kill Node B and assert failover to Node C
@@ -244,6 +231,6 @@ func TestCatalogRoutingAndFailover(t *testing.T) {
 	// Wait a bit for catalog update or failover to happen on next call
 	time.Sleep(500 * time.Millisecond)
 
-	respData2 := callMCP(t, socketPathA, "send_message", map[string]any{"peer_id": "target-peer", "message": "hello"})
+	respData2 := callMCP(t, mcpAddrA, "send_message", map[string]any{"peer_id": "target-peer", "message": "hello"})
 	t.Logf("Second call response: %s", respData2)
 }

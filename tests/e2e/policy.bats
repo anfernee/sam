@@ -131,7 +131,7 @@ mesh_call_remote_tool() {
   
   local args="{\"peer_id\":\"${target_peer_id}\",\"tool_name\":\"${tool_name}\",\"arguments\":\"{}\"}"
   
-  docker run --rm -v "${MESH_SOCKET_DIR}:/sockets" -v "$(pwd)/bin/mcp-client:/mcp-client" python:3.12 /mcp-client -socket "/sockets/node-${caller_idx}.sock" -tool "call_remote_tool" -args "${args}"
+  docker run --rm --network "${MESH_NETWORK}" -v "$(pwd)/bin/mcp-client:/mcp-client" python:3.12 /mcp-client -url "http://sam-node-${caller_idx}:8080/mcp/events" -tool "call_remote_tool" -args "${args}"
 }
 
 setup() {
@@ -206,7 +206,6 @@ EOF"
     --name "${MESH_PREFIX}-node-1" \
     --network "${MESH_NETWORK}" \
     --network-alias "sam-node-1" \
-    -v "${MESH_SOCKET_DIR}:/sockets" \
     -v "${POLICY_VOL}:/etc/sam" \
     "sam-node:local" \
     run \
@@ -216,7 +215,7 @@ EOF"
     --token-url "http://mock-oidc:18080/token" \
     --listen "/ip4/0.0.0.0/udp/5001/quic-v1" \
     --listen "/ip4/0.0.0.0/tcp/5002" \
-    --mcp-socket "/sockets/node-1.sock" \
+    --mcp-addr "0.0.0.0:8080" \
     --mesh "e2e-mesh" \
     --local-policy "/etc/sam/local_policy.yaml" >/dev/null
 
@@ -239,13 +238,16 @@ EOF"
   
   for ((i=0; i<30; i++)); do
     local output
-    output="$(docker run --rm -v "${MESH_SOCKET_DIR}:/sockets" -v "$(pwd)/bin/mcp-client:/mcp-client" python:3.12 /mcp-client -socket "/sockets/node-2.sock" 2>/dev/null)"
+    output="$(docker run --rm --network "${MESH_NETWORK}" -v "$(pwd)/bin/mcp-client:/mcp-client" python:3.12 /mcp-client -url "http://sam-node-2:8080/mcp/events" 2>/dev/null)"
     TARGET_PEER_ID=$(echo "${output}" | grep -oE '12D3Koo[a-zA-Z0-9]+' | grep -v "${hub_id}" | grep -v "${node2_id}" | head -n 1)
     if [[ -n "${TARGET_PEER_ID}" ]]; then
       break
     fi
     sleep 1
   done
+
+  echo "Node 2 logs after discovery loop:" >&3
+  docker logs "${MESH_PREFIX}-node-2" >&3
   
   if [[ -z "${TARGET_PEER_ID}" ]]; then
     echo "Timeout waiting for discovery of Node 1"
@@ -254,7 +256,7 @@ EOF"
 
   # Explicitly connect Node 2 to Node 1 to avoid "no addresses" error
   local node1_addr="/dns4/sam-node-1/tcp/5002/p2p/${TARGET_PEER_ID}"
-  docker run --rm -v "${MESH_SOCKET_DIR}:/sockets" -v "$(pwd)/bin/mcp-client:/mcp-client" python:3.12 /mcp-client -socket "/sockets/node-2.sock" -tool "connect_peer" -args "{\"peer_addr\":\"${node1_addr}\"}" >/dev/null
+  docker run --rm --network "${MESH_NETWORK}" -v "$(pwd)/bin/mcp-client:/mcp-client" python:3.12 /mcp-client -url "http://sam-node-2:8080/mcp/events" -tool "connect_peer" -args "{\"peer_addr\":\"${node1_addr}\"}" >/dev/null
 }
 
 teardown() {
