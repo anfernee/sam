@@ -38,31 +38,33 @@ teardown() {
     -v "$(pwd)/sam-mcp-python:/sam-mcp-python" \
     -e PYTHONPATH=/sam-mcp-python/src \
     python:3.12 \
-    python3 -c "
+    bash -c 'pip install mcp >/dev/null && python3 -c "
 import asyncio
 from sam_mcp.client import SamClient
 import os
 import sys
 
 async def main():
-    os.environ['SAM_MCP_URL'] = 'http://sam-node-1:8080/'
+    os.environ[\"SAM_MCP_URL\"] = \"http://sam-node-1:8080/\"
     try:
         async with SamClient() as client:
             # Test get_tools
             tools = await client.get_tools()
-            print(f'TOOLS_COUNT:{len(tools)}')
+            print(f\"TOOLS_COUNT:{len(tools)}\")
             
             # Test call_tool (get_mesh_info is a standard tool in sam-node)
-            result = await client.call_tool('get_mesh_info', {})
-            print(f'CALL_RESULT:{result}')
+            result = await client.call_tool(\"get_mesh_info\", {})
+            print(f\"CALL_RESULT:{result}\")
             
             sys.exit(0)
-    except Exception as e:
-        print(f'ERROR:{e}')
+    except BaseException as e:
+        import traceback
+        print(f\"ERROR:{e}\")
+        traceback.print_exc()
         sys.exit(1)
 
 asyncio.run(main())
-"
+"'
   echo "Python SDK output: $output"
   [[ "$status" -eq 0 ]]
   [[ "$output" == *"TOOLS_COUNT:"* ]]
