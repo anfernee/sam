@@ -140,9 +140,8 @@ sys.exit(1)
   mesh_get_node_count_via_mcp() {
     local idx="$1"
     local output
-    output="$(docker run --rm -v "${MESH_SOCKET_DIR}:/sockets" -v "$(pwd)/bin/mcp-client:/mcp-client" python:3.12 /mcp-client -socket "/sockets/node-${idx}.sock" 2>/dev/null)"
-    
-    echo "${output}" | grep "Known peers count:" | awk '{print $4}' | tr -d '\r'
+    output="$(timeout 15s docker run --rm -v "${MESH_SOCKET_DIR}:/sockets" -v "$(pwd)/bin/mcp-client:/mcp-client" python:3.12 /mcp-client -socket "/sockets/node-${idx}.sock" 2>/dev/null)"
+    echo "${output}" | jq '.known_peers | length'
   }
 
   mesh_wait_for_node_count() {
@@ -152,11 +151,32 @@ sys.exit(1)
     local i
     for ((i=0; i<timeout_s; i++)); do
       local output
-      output="$(docker run --rm -v "${MESH_SOCKET_DIR}:/sockets" -v "$(pwd)/bin/mcp-client:/mcp-client" python:3.12 /mcp-client -socket "/sockets/node-${idx}.sock" 2>/dev/null)"
+      output="$(timeout 15s docker run --rm -v "${MESH_SOCKET_DIR}:/sockets" -v "$(pwd)/bin/mcp-client:/mcp-client" python:3.12 /mcp-client -socket "/sockets/node-${idx}.sock" 2>/dev/null)"
+      echo "Node ${idx} get_mesh_info raw output: ${output}"
       local count
-      count="$(echo "${output}" | grep "Known peers count:" | awk '{print $4}' | tr -d '\r')"
-      echo "Node ${idx} reported output: ${output}"
+      count="$(echo "${output}" | jq '.known_peers | length')"
+      echo "Node ${idx} reported known peers count: ${count}"
       if [[ "${count}" -eq "${expected}" ]]; then
+        return 0
+      fi
+      sleep 1
+    done
+    return 1
+  }
+
+  mesh_wait_for_peer_connection() {
+    local idx="$1"
+    local target_peer="$2"
+    local timeout_s="${3:-20}"
+    local i
+    for ((i=0; i<timeout_s; i++)); do
+      local output
+      output="$(timeout 15s docker run --rm -v "${MESH_SOCKET_DIR}:/sockets" -v "$(pwd)/bin/mcp-client:/mcp-client" python:3.12 /mcp-client -socket "/sockets/node-${idx}.sock" 2>/dev/null)"
+      echo "[$(date +%T)] Node ${idx} get_mesh_info raw output: ${output}"
+      local connected
+      connected="$(echo "${output}" | jq -r --arg peer "$target_peer" '.connected_peers | index($peer) != null')"
+      echo "[$(date +%T)] Node ${idx} connection to ${target_peer}: ${connected}"
+      if [[ "${connected}" == "true" ]]; then
         return 0
       fi
       sleep 1

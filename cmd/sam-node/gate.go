@@ -95,7 +95,6 @@ func (n *SamNode) HandleMCPStream(s network.Stream) {
 			return nil, nil, fmt.Errorf("node not initialized")
 		}
 		n.mu.Lock()
-		knownCount := len(n.knownPeers)
 		var knownPeers []string
 		for p := range n.knownPeers {
 			knownPeers = append(knownPeers, p)
@@ -103,10 +102,24 @@ func (n *SamNode) HandleMCPStream(s network.Stream) {
 		n.mu.Unlock()
 
 		peers := n.Host.Network().Peers()
+		var connectedPeers []string
+		for _, p := range peers {
+			connectedPeers = append(connectedPeers, p.String())
+		}
 		dhtSize := n.DHT.RoutingTable().Size()
-		
-		response := fmt.Sprintf("Known peers count: %d\nKnown peers list: %v\nConnected peers: %d\nDHT Routing Table size: %d\nHub Peer ID: %s", knownCount, knownPeers, len(peers), dhtSize, n.HubPeerID)
-		
+
+		resData := map[string]any{
+			"known_peers":     knownPeers,
+			"connected_peers": connectedPeers,
+			"dht_size":        dhtSize,
+			"hub_peer_id":     n.HubPeerID.String(),
+		}
+		responseBytes, err := json.Marshal(resData)
+		if err != nil {
+			return nil, nil, err
+		}
+		response := string(responseBytes)
+
 		return &mcp.CallToolResult{
 			Content: []mcp.Content{
 				&mcp.TextContent{Text: response},

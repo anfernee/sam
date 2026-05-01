@@ -29,7 +29,6 @@ import (
 	"github.com/google/sam/api"
 	lru "github.com/hashicorp/golang-lru/v2"
 	"github.com/libp2p/go-libp2p"
-	"github.com/libp2p/go-libp2p/p2p/net/connmgr"
 	dht "github.com/libp2p/go-libp2p-kad-dht"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	"github.com/libp2p/go-libp2p/core/crypto"
@@ -39,6 +38,7 @@ import (
 	"github.com/libp2p/go-libp2p/core/protocol"
 	"github.com/libp2p/go-libp2p/p2p/discovery/routing"
 	"github.com/libp2p/go-libp2p/p2p/discovery/util"
+	"github.com/libp2p/go-libp2p/p2p/net/connmgr"
 	libp2ptls "github.com/libp2p/go-libp2p/p2p/security/tls"
 	libp2pquic "github.com/libp2p/go-libp2p/p2p/transport/quic"
 	"github.com/libp2p/go-libp2p/p2p/transport/tcp"
@@ -268,7 +268,9 @@ func (n *SamNode) listenForHubEvents(ctx context.Context) {
 		n.mu.Lock()
 		switch event.Type {
 		case api.MeshEvent_JOIN:
-			n.knownPeers[event.PeerId] = true
+			if event.PeerId != n.Host.ID().String() {
+				n.knownPeers[event.PeerId] = true
+			}
 			logger.Infof("[Mesh Event] Peer joined: %s", event.PeerId)
 		case api.MeshEvent_EXIT:
 			delete(n.knownPeers, event.PeerId)
@@ -402,16 +404,17 @@ func (n *SamNode) startDiscovery(ctx context.Context, meshID string, interval ti
 					continue
 				}
 				n.mu.Lock()
-				if !n.knownPeers[p.ID.String()] {
-					n.knownPeers[p.ID.String()] = true
-					logger.Infof("[Discovery] Found new peer via DHT: %s", p.ID)
+				n.knownPeers[p.ID.String()] = true
+				n.mu.Unlock()
+
+				if n.Host.Network().Connectedness(p.ID) != network.Connected {
+					logger.Infof("[Discovery] Found peer not connected via DHT: %s", p.ID)
 					go func(pi peer.AddrInfo) {
 						if err := n.Host.Connect(ctx, pi); err != nil {
 							logger.Errorf("[Discovery] Failed to connect to %s: %v", pi.ID, err)
 						}
 					}(p)
 				}
-				n.mu.Unlock()
 			}
 		}
 	}

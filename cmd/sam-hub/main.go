@@ -18,17 +18,13 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
 	"strings"
 	"time"
-
-	"github.com/libp2p/go-libp2p/core/peer"
-	"github.com/multiformats/go-multiaddr"
-	"go.etcd.io/bbolt"
 
 	"github.com/biscuit-auth/biscuit-go/v2"
 	"github.com/biscuit-auth/biscuit-go/v2/parser"
@@ -75,6 +71,10 @@ var (
 	keyGracePeriod        time.Duration
 	keysDBPath            string
 	metricsAddr           string
+	adminToken            string
+	tlsCertFile           string
+	tlsKeyFile            string
+	tlsCAFile             string
 )
 
 var logger = golog.Logger("sam-hub")
@@ -582,12 +582,23 @@ func (h *Hub) signEvent(event *api.MeshEvent) error {
 	return nil
 }
 
+func (h *Hub) PublishEvent(ctx context.Context, event *api.MeshEvent) error {
+	if err := h.signEvent(event); err != nil {
+		return err
+	}
+	data, err := proto.Marshal(event)
+	if err != nil {
+		return err
+	}
+	return h.EventTopic.Publish(ctx, data)
+}
+
 func main() {
 	rootCmd := &cobra.Command{
 		Use:   "sam-hub",
 		Short: "Sovereign Agent Mesh - Multi-Transport Hub",
 		Run: func(cmd *cobra.Command, args []string) {
-			ctx := context.Background()
+			ctx := cmd.Context()
 
 			// Initialize logging
 			if os.Getenv("LOG_FORMAT") == "json" {
@@ -621,9 +632,52 @@ func main() {
 			go func() {
 				mux := http.NewServeMux()
 				mux.Handle("/metrics", promhttp.Handler())
-				logger.Infof("Starting metrics server on %s", metricsAddr)
-				if err := http.ListenAndServe(metricsAddr, mux); err != nil {
-					logger.Errorf("Metrics server failed: %v", err)
+				mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+					w.WriteHeader(http.StatusOK)
+					_, _ = w.Write([]byte("ok"))
+				})
+
+				mux.HandleFunc("/admin/ban", func(w http.ResponseWriter, r *http.Request) {
+					if adminToken != "" {
+						authHeader := r.Header.Get("Authorization")
+						if authHeader != "Bearer "+adminToken {
+							http.Error(w, "Unauthorized", http.StatusUnauthorized)
+							return
+						}
+					}
+					handleBan(h)(w, r)
+				})
+
+				server := &http.Server{
+					Addr:    metricsAddr,
+					Handler: mux,
+				}
+
+				// Configure TLS if requested
+				if tlsCertFile != "" && tlsKeyFile != "" {
+					tlsConfig := &tls.Config{}
+					if tlsCAFile != "" {
+						caCert, err := os.ReadFile(tlsCAFile)
+						if err != nil {
+							logger.Fatalf("Failed to read CA cert: %v", err)
+						}
+						caCertPool := x509.NewCertPool()
+						caCertPool.AppendCertsFromPEM(caCert)
+						tlsConfig.ClientCAs = caCertPool
+						tlsConfig.ClientAuth = tls.RequireAndVerifyClientCert
+						logger.Info("mTLS enabled for admin service")
+					}
+					server.TLSConfig = tlsConfig
+
+					logger.Infof("Starting HTTPS server on %s", metricsAddr)
+					if err := server.ListenAndServeTLS(tlsCertFile, tlsKeyFile); err != nil {
+						logger.Errorf("HTTPS server failed: %v", err)
+					}
+				} else {
+					logger.Infof("Starting HTTP server on %s", metricsAddr)
+					if err := server.ListenAndServe(); err != nil {
+						logger.Errorf("HTTP server failed: %v", err)
+					}
 				}
 			}()
 
@@ -632,7 +686,7 @@ func main() {
 			logger.Infof("PeerID: %s", h.Host.ID())
 
 			logger.Infof("Hub running on P2P transports only.")
-			select {}
+			<-ctx.Done()
 		},
 	}
 
@@ -651,7 +705,11 @@ func main() {
 	rootCmd.Flags().DurationVar(&keyRotationInterval, "key-rotation-interval", 0, "Key rotation interval (e.g. 12h). 0 disables rotation.")
 	rootCmd.Flags().DurationVar(&keyGracePeriod, "key-grace-period", 24*time.Hour, "Key grace period for old keys (e.g. 24h).")
 	rootCmd.Flags().StringVar(&keysDBPath, "keys-db", "keys.db", "Path to BoltDB file for keys")
-	rootCmd.Flags().StringVar(&metricsAddr, "metrics-addr", ":9090", "Address to listen on for Prometheus metrics")
+	rootCmd.PersistentFlags().StringVar(&metricsAddr, "metrics-addr", ":9090", "Address to listen on for Prometheus metrics")
+	rootCmd.PersistentFlags().StringVar(&adminToken, "admin-token", "", "Secret token for authorizing admin requests")
+	rootCmd.PersistentFlags().StringVar(&tlsCertFile, "tls-cert-file", "", "Path to TLS certificate for the server")
+	rootCmd.PersistentFlags().StringVar(&tlsKeyFile, "tls-key-file", "", "Path to TLS private key for the server")
+	rootCmd.PersistentFlags().StringVar(&tlsCAFile, "tls-ca-file", "", "Path to CA certificate to verify client certificates (enables mTLS)")
 
 	var peerToBan string
 	var banReason string
@@ -670,101 +728,57 @@ func main() {
 				logger.Fatal("Missing --peer flag")
 			}
 
-			// 1. Open BoltDB and extract key
-			db, err := bbolt.Open(keysDBPath, 0600, nil)
-			if err != nil {
-				logger.Fatal(err)
+			targetAddr := metricsAddr
+			if strings.HasPrefix(targetAddr, ":") {
+				targetAddr = "localhost" + targetAddr
 			}
-			defer db.Close() // nolint:errcheck
 
-			var kr KeyRing
-			err = db.View(func(tx *bbolt.Tx) error {
-				b := tx.Bucket([]byte("keyring"))
-				data := b.Get([]byte("data"))
-				if data == nil {
-					return fmt.Errorf("keyring not found in DB")
+			scheme := "http"
+			var tlsConfig *tls.Config
+			if tlsCertFile != "" || tlsCAFile != "" {
+				scheme = "https"
+				tlsConfig = &tls.Config{
+					InsecureSkipVerify: true, // For tests, usually self-signed
 				}
-				return json.Unmarshal(data, &kr)
-			})
-			if err != nil {
-				logger.Fatal(err)
-			}
-
-			privKey := ed25519.PrivateKey(kr.Current.Private)
-
-			// 2. Create and sign MeshEvent_BANNED
-			event := &api.MeshEvent{
-				Type:      api.MeshEvent_BANNED,
-				PeerId:    peerToBan,
-				Timestamp: time.Now().Unix(),
-			}
-
-			event.Signature = nil
-			data, err := proto.Marshal(event)
-			if err != nil {
-				logger.Fatal(err)
-			}
-			event.Signature = ed25519.Sign(privKey, data)
-
-			eventData, err := proto.Marshal(event)
-			if err != nil {
-				logger.Fatal(err)
-			}
-
-			// 3. Initialize minimal libp2p host and pubsub
-			ctx := context.Background()
-			h, err := libp2p.New(
-				libp2p.Transport(libp2pquic.NewTransport),
-				libp2p.Transport(tcp.NewTCPTransport),
-				libp2p.Security(libp2ptls.ID, libp2ptls.New),
-			)
-			if err != nil {
-				logger.Fatal(err)
-			}
-			defer func() { _ = h.Close() }() // nolint:errcheck
-
-			ps, err := pubsub.NewGossipSub(ctx, h)
-			if err != nil {
-				logger.Fatal(err)
-			}
-
-			topic, err := ps.Join(api.GossipEvents)
-			if err != nil {
-				logger.Fatal(err)
-			}
-
-			if connectAddr != "" {
-				addr, err := multiaddr.NewMultiaddr(connectAddr)
-				if err != nil {
-					logger.Fatal(err)
+				if tlsCAFile != "" {
+					caCert, err := os.ReadFile(tlsCAFile)
+					if err != nil {
+						logger.Fatalf("Failed to read CA cert: %v", err)
+					}
+					caCertPool := x509.NewCertPool()
+					caCertPool.AppendCertsFromPEM(caCert)
+					tlsConfig.RootCAs = caCertPool
+					tlsConfig.InsecureSkipVerify = false // Verify if CA is provided!
 				}
-				addrInfo, err := peer.AddrInfoFromP2pAddr(addr)
-				if err != nil {
-					logger.Fatal(err)
-				}
-				if err := h.Connect(ctx, *addrInfo); err != nil {
-					logger.Fatal(err)
-				}
-				logger.Infof("Connected to %s", connectAddr)
-			} else {
-				logger.Warn("No --connect address provided. Event might not be broadcasted if no peers are connected.")
 			}
 
-			// Wait for pubsub peers
-			fmt.Println("Waiting for pubsub peers...")
-			for i := 0; i < 60; i++ {
-				peers := topic.ListPeers()
-				if len(peers) > 0 {
-					fmt.Printf("Found %d pubsub peers\n", len(peers))
-					break
-				}
-				time.Sleep(500 * time.Millisecond)
+			client := &http.Client{
+				Transport: &http.Transport{
+					TLSClientConfig: tlsConfig,
+				},
 			}
 
-			if err := topic.Publish(ctx, eventData); err != nil {
-				logger.Fatal(err)
+			url := fmt.Sprintf("%s://%s/admin/ban?peer=%s", scheme, targetAddr, peerToBan)
+			req, err := http.NewRequest("POST", url, nil)
+			if err != nil {
+				logger.Fatalf("Failed to create request: %v", err)
 			}
-			logger.Infof("Published BANNED event for peer %s", peerToBan)
+
+			if adminToken != "" {
+				req.Header.Set("Authorization", "Bearer "+adminToken)
+			}
+
+			resp, err := client.Do(req)
+			if err != nil {
+				logger.Fatalf("Failed to send ban request: %v", err)
+			}
+			defer func() { _ = resp.Body.Close() }()
+
+			if resp.StatusCode != http.StatusOK {
+				logger.Fatalf("Ban request failed: %s", resp.Status)
+			}
+
+			fmt.Printf("Published BANNED event for peer %s\n", peerToBan)
 		},
 	}
 

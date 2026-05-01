@@ -37,7 +37,9 @@ teardown() {
     --key "${hub_key}" \
     --listen "/ip4/0.0.0.0/udp/4001/quic-v1" \
     --listen "/ip4/0.0.0.0/tcp/4002" \
-    --mesh "e2e-mesh" >/dev/null
+    --mesh "e2e-mesh" \
+    --admin-token "e2e-token" \
+    --log-level debug >/dev/null
 
   MESH_CONTAINERS+=("${hub_name}")
   mesh_wait_for_log "${hub_name}" "PeerID:" 20
@@ -47,35 +49,56 @@ teardown() {
   echo "${hub_peer_id}" > "/tmp/${MESH_PREFIX}-hub-peer-id"
 
   # Start Node 1
-  run mesh_start_node 1 "--discovery-interval 100ms"
+  echo "[$(date +%T)] Starting Node 1"
+  run mesh_start_node 1 "--discovery-interval 100ms --log-level debug"
   [[ "$status" -eq 0 ]]
   local node1_name="${MESH_PREFIX}-node-1"
   mesh_wait_for_log "${node1_name}" "SAM Node Online" 20
+  mesh_wait_for_mcp_ready 1 20
   
   local node1_peer_id
-  node1_peer_id=$(docker logs "${node1_name}" 2>&1 | grep -oE '12D3Koo[a-zA-Z0-9]+' | head -n 1)
+  node1_peer_id=$(docker logs "${node1_name}" 2>&1 | grep "PeerID:" | head -n 1 | awk '{print $2}' | tr -d '\r')
 
   # Start Node 2
-  run mesh_start_node 2 "--discovery-interval 100ms"
+  echo "[$(date +%T)] Starting Node 2"
+  run mesh_start_node 2 "--discovery-interval 100ms --log-level debug"
   [[ "$status" -eq 0 ]]
   local node2_name="${MESH_PREFIX}-node-2"
   mesh_wait_for_log "${node2_name}" "SAM Node Online" 20
+  mesh_wait_for_mcp_ready 2 20
 
   # Extract Node 2 Peer ID
   local node2_peer_id
-  node2_peer_id=$(docker logs "${node2_name}" 2>&1 | grep -oE '12D3Koo[a-zA-Z0-9]+' | head -n 1)
+  node2_peer_id=$(docker logs "${node2_name}" 2>&1 | grep "PeerID:" | head -n 1 | awk '{print $2}' | tr -d '\r')
   [[ -n "${node2_peer_id}" ]]
 
-  # Verify nodes are connected to each other or at least known
-  # Wait for Node 1 to see 2 peers (Hub + Node 2)
-  run mesh_wait_for_node_count 1 2 20
+  # Explicitly connect Node 1 to Node 2
+  echo "[$(date +%T)] Explicitly connecting Node 1 to Node 2"
+  local node2_addr="/dns4/sam-node-2/tcp/5002/p2p/${node2_peer_id}"
+  run docker run --rm -v "${MESH_SOCKET_DIR}:/sockets" -v "$(pwd)/bin/mcp-client:/mcp-client" python:3.12 /mcp-client -socket "/sockets/node-1.sock" -tool "connect_peer" -args "{\"peer_addr\":\"${node2_addr}\"}"
+  [[ "$status" -eq 0 ]]
+
+  # Verify Node 1 connects to Node 2
+  echo "[$(date +%T)] Waiting for connection"
+  run mesh_wait_for_peer_connection 1 "${node2_peer_id}" 20
+  if [[ "$status" -ne 0 ]]; then
+    echo "Node 1 logs:"
+    docker logs "${node1_name}"
+    echo "Node 2 logs:"
+    docker logs "${node2_name}"
+  fi
   [[ "$status" -eq 0 ]]
 
   # Publish ban event for Node 2
-  run docker exec "${hub_name}" /sam-hub admin ban --peer "${node2_peer_id}" --connect "/ip4/127.0.0.1/tcp/4002"
+  echo "[$(date +%T)] Publishing ban event"
+  run docker exec "${hub_name}" /sam-hub admin ban --peer "${node2_peer_id}" --connect "/dns4/sam-hub/tcp/4002/p2p/${hub_peer_id}" --admin-token "e2e-token"
   
   echo "admin ban output: $output"
   [[ "$status" -eq 0 ]]
+  if [[ "$output" != *"Published BANNED event"* ]]; then
+    echo "Hub logs:"
+    docker logs "${hub_name}"
+  fi
   [[ "$output" == *"Published BANNED event"* ]]
 
   # Verify Node 1 receives the ban event and logs it
