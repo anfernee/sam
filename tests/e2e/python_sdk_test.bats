@@ -34,7 +34,7 @@ teardown() {
 
   # Use the Python SDK to interact with the node
   run docker run --rm \
-    -v "${MESH_SOCKET_DIR}:/sockets" \
+    --network "${MESH_NETWORK}" \
     -v "$(pwd)/sam-mcp-python:/sam-mcp-python" \
     -e PYTHONPATH=/sam-mcp-python/src \
     python:3.12 \
@@ -45,7 +45,7 @@ import os
 import sys
 
 async def main():
-    os.environ['SAM_MCP_SOCKET'] = '/sockets/node-1.sock'
+    os.environ['SAM_MCP_URL'] = 'http://sam-node-1:8080/'
     try:
         async with SamClient() as client:
             # Test get_tools

@@ -108,14 +108,14 @@ if [[ -z "${MESH_HELPERS_LOADED:-}" ]]; then
     local data='{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}},"id":1}'
     
     for ((i=0; i<timeout_s; i++)); do
-      if docker run --rm -v "${MESH_SOCKET_DIR}:/sockets" -e SOCKET_PATH="/sockets/node-${idx}.sock" -e DATA="${data}" python:3.12 python3 -c "
+      if docker run --rm --network "${MESH_NETWORK}" -e NODE_HOST="sam-node-${idx}" -e DATA="${data}" python:3.12 python3 -c "
 import socket
 import os
 import sys
 
 try:
-    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    s.connect(os.environ['SOCKET_PATH'])
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.connect((os.environ['NODE_HOST'], 8080))
     
     data = os.environ['DATA'].encode('utf-8')
     request = f\"POST /mcp HTTP/1.1\\r\\nHost: localhost\\r\\nContent-Type: application/json\\r\\nAccept: application/json, text/event-stream\\r\\nContent-Length: {len(data)}\\r\\n\\r\\n\".encode('utf-8') + data
@@ -140,7 +140,7 @@ sys.exit(1)
   mesh_get_node_count_via_mcp() {
     local idx="$1"
     local output
-    output="$(timeout 15s docker run --rm -v "${MESH_SOCKET_DIR}:/sockets" -v "$(pwd)/bin/mcp-client:/mcp-client" python:3.12 /mcp-client -socket "/sockets/node-${idx}.sock" 2>/dev/null)"
+    output="$(timeout 15s docker run --rm --network "${MESH_NETWORK}" -v "$(pwd)/bin/mcp-client:/mcp-client" python:3.12 /mcp-client -url "http://sam-node-${idx}:8080/" 2>/dev/null)"
     echo "${output}" | jq '.known_peers | length'
   }
 
@@ -151,7 +151,7 @@ sys.exit(1)
     local i
     for ((i=0; i<timeout_s; i++)); do
       local output
-      output="$(timeout 15s docker run --rm -v "${MESH_SOCKET_DIR}:/sockets" -v "$(pwd)/bin/mcp-client:/mcp-client" python:3.12 /mcp-client -socket "/sockets/node-${idx}.sock" 2>/dev/null)"
+      output="$(timeout 15s docker run --rm --network "${MESH_NETWORK}" -v "$(pwd)/bin/mcp-client:/mcp-client" python:3.12 /mcp-client -url "http://sam-node-${idx}:8080/" 2>/dev/null)"
       echo "Node ${idx} get_mesh_info raw output: ${output}"
       local count
       count="$(echo "${output}" | jq '.known_peers | length')"
@@ -255,7 +255,6 @@ sys.exit(1)
       --name "${name}" \
       --network "${MESH_NETWORK}" \
       --network-alias "sam-node-${idx}" \
-      -v "${MESH_SOCKET_DIR}:/sockets" \
       "sam-node:local" \
       run \
       ${flags} \
@@ -265,7 +264,7 @@ sys.exit(1)
       --token-url "http://mock-oidc:18080/token" \
       --listen "/ip4/0.0.0.0/udp/5001/quic-v1" \
       --listen "/ip4/0.0.0.0/tcp/5002" \
-      --mcp-socket "/sockets/node-${idx}.sock" \
+      --mcp-addr "0.0.0.0:8080" \
       --mesh "e2e-mesh" >/dev/null
 
     MESH_CONTAINERS+=("${name}")

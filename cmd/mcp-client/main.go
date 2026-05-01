@@ -20,8 +20,6 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"net"
-	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -31,14 +29,14 @@ import (
 )
 
 func main() {
-	socketPath := flag.String("socket", "", "Path to Unix domain socket")
+	serverURL := flag.String("url", "", "MCP server URL (e.g. http://localhost:8080/)")
 	toolName := flag.String("tool", "get_mesh_info", "Tool to call")
 	toolArgs := flag.String("args", "{}", "JSON arguments for the tool")
 	timoutArgs := flag.Int("timeout", 10, "Timeout in seconds")
 	flag.Parse()
 
-	if *socketPath == "" {
-		log.Fatal("Must specify -socket")
+	if *serverURL == "" {
+		log.Fatal("Must specify -url")
 	}
 
 	var ctx context.Context
@@ -58,21 +56,14 @@ func main() {
 		cancel()
 	}()
 
-	// Override default HTTP client transport to use Unix socket
-	http.DefaultClient.Transport = &http.Transport{
-		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			return net.Dial("unix", *socketPath)
-		},
-	}
-
 	// Create MCP client
 	client := mcp.NewClient(&mcp.Implementation{
 		Name:    "mcp-test-client",
 		Version: "0.1.0",
 	}, nil)
 
-	// Connect to server using the URL (host is ignored by custom dialer)
-	session, err := client.Connect(ctx, &mcp.StreamableClientTransport{Endpoint: "http://localhost/mcp"}, nil)
+	// Connect to server using the URL
+	session, err := client.Connect(ctx, &mcp.StreamableClientTransport{Endpoint: *serverURL}, nil)
 	if err != nil {
 		log.Fatalf("Failed to connect: %v", err)
 	}
