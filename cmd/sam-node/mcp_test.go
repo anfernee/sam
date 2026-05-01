@@ -40,7 +40,7 @@ func TestMCPHandler_HTTP(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// We expect OK or MethodNotAllowed depending on exact handler implementation,
 	// but it should not be 404 or 500.
@@ -58,7 +58,7 @@ func TestMCPHandler_HTTP(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp2.Body.Close()
+	defer func() { _ = resp2.Body.Close() }()
 
 	if resp2.StatusCode != http.StatusOK && resp2.StatusCode != http.StatusMethodNotAllowed && resp2.StatusCode != http.StatusBadRequest {
 		t.Errorf("Expected status OK, MethodNotAllowed, or BadRequest on /mcp, got %d", resp2.StatusCode)
