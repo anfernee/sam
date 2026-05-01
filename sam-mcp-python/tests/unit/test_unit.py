@@ -67,21 +67,28 @@ async def test_transport_send_message():
 # Client Tests
 @pytest.mark.asyncio
 async def test_client_get_tools():
-    with patch("sam_mcp.client.SamTransport") as MockTransport:
-        mock_transport = MockTransport.return_value
-        mock_transport.connect = AsyncMock()
-        mock_transport.close = AsyncMock()
+    with patch("sam_mcp.client.sse_client") as mock_sse_client, \
+         patch("sam_mcp.client.ClientSession") as MockClientSession:
+         
+        mock_cm = AsyncMock()
+        mock_sse_client.return_value = mock_cm
+        mock_cm.__aenter__.return_value = (MagicMock(), MagicMock())
+        mock_cm.__aexit__ = AsyncMock()
         
-        # Mock initialize response and tools/list response
-        mock_transport.send_message.side_effect = [
-            '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05"}}', # init
-            '{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"test_tool"}]}}'  # list
-        ]
-        mock_transport.writer = MagicMock()
-        mock_transport.writer.write = AsyncMock()
-        mock_transport.writer.drain = AsyncMock()
+        mock_session = MockClientSession.return_value
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock()
+        mock_session.initialize = AsyncMock()
         
-        async with SamClient(socket_path="/tmp/test.sock") as client:
+        mock_tool = MagicMock()
+        mock_tool.name = "test_tool"
+        mock_tool.model_dump.return_value = {"name": "test_tool"}
+        
+        mock_resp = MagicMock()
+        mock_resp.tools = [mock_tool]
+        mock_session.list_tools = AsyncMock(return_value=mock_resp)
+        
+        async with SamClient(server_url="http://localhost:8080/sse") as client:
             tools = await client.get_tools()
             assert len(tools) == 1
             assert tools[0]["name"] == "test_tool"
@@ -94,8 +101,8 @@ def test_langchain_adapter():
     client = MockClient()
     tools = [{"name": "test_tool", "description": "A test tool"}]
     
-    # We need to mock langchain-core import if it's not installed in the environment
-    with patch.dict("sys.modules", {"langchain_core.tools": MagicMock()}):
+    # We need to mock langchain-core and pydantic imports if they are not installed
+    with patch.dict("sys.modules", {"langchain_core.tools": MagicMock(), "pydantic": MagicMock()}):
         from langchain_core.tools import StructuredTool
         
         mock_structured_tool = MagicMock()

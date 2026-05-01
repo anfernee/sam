@@ -1,74 +1,49 @@
-import json
+import asyncio
 import os
 from typing import Any, Dict, List, Optional
-from .transport import SamTransport
-from .protocol import Protocol, JsonRpcError
+from mcp import ClientSession
+from mcp.client.sse import sse_client
 
 class SamClient:
-    """High-level developer interface for SAM MCP."""
+    """High-level developer interface for SAM MCP using official SDK."""
     
-    def __init__(self, socket_path: Optional[str] = None):
-        if socket_path is None:
-            socket_path = os.environ.get("SAM_MCP_SOCKET", "/tmp/sam/mcp.sock")
-        self.transport = SamTransport(socket_path)
-        self._request_id = 0
+    def __init__(self, server_url: Optional[str] = None):
+        if server_url is None:
+            server_url = os.environ.get("SAM_MCP_URL", "http://localhost:8080/sse")
+        self.server_url = server_url
+        self.session: Optional[ClientSession] = None
+        self._sse_cm = None
 
     async def connect(self):
-        """Connects to the SAM node and performs MCP initialization."""
-        await self.transport.connect()
-        await self._initialize()
+        """Connects to the SAM node via SSE."""
+        self._sse_cm = sse_client(self.server_url)
+        read_stream, write_stream = await self._sse_cm.__aenter__()
+        self.session = ClientSession(read_stream, write_stream)
+        await self.session.__aenter__()
+        await self.session.initialize()
 
     async def close(self):
         """Closes the connection."""
-        await self.transport.close()
-
-    def _next_id(self) -> int:
-        self._request_id += 1
-        return self._request_id
-
-    async def _initialize(self):
-        """Performs MCP handshake."""
-        params = {
-            "protocolVersion": "2024-11-05",
-            "capabilities": {},
-            "clientInfo": {"name": "sam-mcp-python", "version": "0.1.0"}
-        }
-        req = Protocol.create_request("initialize", params, self._next_id())
-        resp_str = await self.transport.send_message(json.dumps(req))
-        resp = Protocol.parse_message(resp_str)
-        
-        if "error" in resp:
-            raise JsonRpcError(resp["error"]["code"], resp["error"]["message"], resp["error"].get("data"))
-            
-        # Standard MCP also expects an 'initialized' notification
-        notif = Protocol.create_request("notifications/initialized")
-        await self.transport.send_message(json.dumps(notif))
+        if self.session:
+            await self.session.__aexit__(None, None, None)
+        if self._sse_cm:
+            await self._sse_cm.__aexit__(None, None, None)
+        self.session = None
+        self._sse_cm = None
 
     async def get_tools(self) -> List[Dict[str, Any]]:
         """Returns available mesh tools."""
-        req = Protocol.create_request("tools/list", {}, self._next_id())
-        resp_str = await self.transport.send_message(json.dumps(req))
-        resp = Protocol.parse_message(resp_str)
-        
-        if "error" in resp:
-            raise JsonRpcError(resp["error"]["code"], resp["error"]["message"], resp["error"].get("data"))
-            
-        return resp.get("result", {}).get("tools", [])
+        if not self.session:
+            raise RuntimeError("Not connected")
+        resp = await self.session.list_tools()
+        return [t.model_dump() if hasattr(t, "model_dump") else t for t in resp.tools]
 
     async def call_tool(self, name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
         """Executes a tool over the mesh."""
-        params = {
-            "name": name,
-            "arguments": arguments
-        }
-        req = Protocol.create_request("tools/call", params, self._next_id())
-        resp_str = await self.transport.send_message(json.dumps(req))
-        resp = Protocol.parse_message(resp_str)
-        
-        if "error" in resp:
-            raise JsonRpcError(resp["error"]["code"], resp["error"]["message"], resp["error"].get("data"))
-            
-        return resp.get("result", {})
+        if not self.session:
+            raise RuntimeError("Not connected")
+        resp = await self.session.call_tool(name, arguments)
+        return resp.model_dump() if hasattr(resp, "model_dump") else resp
 
     async def __aenter__(self):
         await self.connect()

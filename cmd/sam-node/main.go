@@ -23,7 +23,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -59,7 +58,7 @@ var (
 	clientSecretFlag      string
 	tokenURLFlag          string
 	hubPublicKeyFlag      string
-	mcpSocketFlag         string
+	mcpAddrFlag           string
 	meshFlag              string
 	discoveryIntervalFlag string
 	enableRelayFlag       bool
@@ -219,7 +218,7 @@ func main() {
 			node.Host.SetStreamHandler(api.AuthProtocolID, node.HandleAuthHandshake)
 
 			// Start MCP Server
-			startMCPServer(node, mcpSocketFlag, dataDir)
+			startMCPServer(node, mcpAddrFlag)
 
 			fmt.Printf("SAM Node Online.\nPeerID: %s\nListening on: %v\n", node.Host.ID(), node.Host.Addrs())
 
@@ -306,7 +305,7 @@ func main() {
 	runCmd.Flags().StringVar(&clientIDFlag, "client-id", os.Getenv("SAM_OIDC_ID"), "OIDC Client ID for M2M")
 	runCmd.Flags().StringVar(&clientSecretFlag, "client-secret", os.Getenv("SAM_OIDC_SECRET"), "OIDC Client Secret for M2M")
 	runCmd.Flags().StringVar(&hubPublicKeyFlag, "hub-public-key", "", "Hub Public Key (32-byte Hex)")
-	runCmd.Flags().StringVar(&mcpSocketFlag, "mcp-socket", "", "Path to Unix domain socket for local MCP server (default: <datadir>/mcp.sock)")
+	runCmd.Flags().StringVar(&mcpAddrFlag, "mcp-addr", "127.0.0.1:8080", "Local TCP address for the MCP HTTP/SSE server")
 	runCmd.Flags().StringVar(&meshFlag, "mesh", DefaultMeshName, "Mesh federation name")
 	runCmd.Flags().StringVar(&discoveryIntervalFlag, "discovery-interval", DefaultDiscoveryInterval, "Polling interval for DHT discovery")
 	runCmd.Flags().BoolVar(&enableRelayFlag, "enable-relay", false, "Allow this node to serve as a relay for others")
@@ -357,20 +356,16 @@ func getOrGenerateKey(s *Store) crypto.PrivKey {
 	return priv
 }
 
-func startMCPServer(node *SamNode, socketPath string, dataDir string) {
+func startMCPServer(node *SamNode, mcpAddr string) {
 	mcpHandler := NewMCPHandler(node)
 	go func() {
-		if socketPath == "" {
-			socketPath = filepath.Join(dataDir, "mcp.sock")
+		if mcpAddr == "" {
+			mcpAddr = "127.0.0.1:8080"
 		}
 
-		if err := os.Remove(socketPath); err != nil && !os.IsNotExist(err) {
-			logger.Errorf("Failed to remove old socket %s: %v", socketPath, err)
-		}
-
-		listener, err := net.Listen("unix", socketPath)
+		listener, err := net.Listen("tcp", mcpAddr)
 		if err != nil {
-			logger.Errorf("Failed to listen on Unix socket %s: %v", socketPath, err)
+			logger.Errorf("Failed to listen on TCP address %s: %v", mcpAddr, err)
 			return
 		}
 		defer func() {
@@ -379,7 +374,7 @@ func startMCPServer(node *SamNode, socketPath string, dataDir string) {
 			}
 		}()
 
-		fmt.Printf("Starting MCP server on Unix socket %s\n", socketPath)
+		fmt.Printf("Starting MCP server on TCP address %s\n", listener.Addr().String())
 		if err := http.Serve(listener, mcpHandler); err != nil {
 			logger.Errorf("MCP server error: %v", err)
 		}
