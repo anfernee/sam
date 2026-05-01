@@ -51,7 +51,7 @@ class Protocol:
         try:
             data = json.loads(message_str)
         except json.JSONDecodeError as e:
-            raise JsonRpcError(-32700, "Parse error", str(e))
+            raise JsonRpcError(-32700, f"Parse error: {e}. Message: {message_str}")
         
         if not isinstance(data, dict):
             raise JsonRpcError(-32600, "Invalid Request", "Message must be a JSON object")

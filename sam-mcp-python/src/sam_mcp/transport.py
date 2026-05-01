@@ -32,7 +32,7 @@ class SamTransport:
             f"POST /mcp HTTP/1.1\r\n"
             f"Host: localhost\r\n"
             f"Content-Type: application/json\r\n"
-            f"Accept: application/json\r\n"
+            f"Accept: application/json, text/event-stream\r\n"
             f"Content-Length: {len(data_bytes)}\r\n"
             f"\r\n"
         ).encode('utf-8') + data_bytes
@@ -53,17 +53,29 @@ class SamTransport:
         headers_str = headers_data.decode('utf-8')
         lines = headers_str.split("\r\n")
         
+        # Parse status line
+        status_line = lines[0]
+        parts = status_line.split(" ", 2)
+        if len(parts) < 2:
+            raise RuntimeError(f"Invalid HTTP status line: {status_line}")
+        status_code = int(parts[1])
+        
         # Find Content-Length
         content_length = 0
-        for line in lines:
+        for line in lines[1:]:
             if line.lower().startswith("content-length:"):
                 content_length = int(line.split(":", 1)[1].strip())
                 break
 
+        if not (200 <= status_code < 300):
+            body = ""
+            if content_length > 0:
+                body_bytes = await self.reader.readexactly(content_length)
+                body = body_bytes.decode('utf-8')
+            raise RuntimeError(f"HTTP Error {status_code}: {body}")
+
         if content_length == 0:
-            # If no content length, read until EOF
-            body = await self.reader.read(-1)
-            return body.decode('utf-8')
+            return ""
 
         body = await self.reader.readexactly(content_length)
         return body.decode('utf-8')

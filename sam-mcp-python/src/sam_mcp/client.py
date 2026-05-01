@@ -41,20 +41,8 @@ class SamClient:
             raise JsonRpcError(resp["error"]["code"], resp["error"]["message"], resp["error"].get("data"))
             
         # Standard MCP also expects an 'initialized' notification
-        notif = {
-            "jsonrpc": "2.0",
-            "method": "notifications/initialized"
-        }
-        # We don't strictly need to wait for response for notification, but we send it.
-        await self.transport.writer.write((
-            f"POST /mcp HTTP/1.1\r\n"
-            f"Host: localhost\r\n"
-            f"Content-Type: application/json\r\n"
-            f"Content-Length: {len(json.dumps(notif))}\r\n"
-            f"\r\n"
-            f"{json.dumps(notif)}"
-        ).encode('utf-8'))
-        await self.transport.writer.drain()
+        notif = Protocol.create_request("notifications/initialized")
+        await self.transport.send_message(json.dumps(notif))
 
     async def get_tools(self) -> List[Dict[str, Any]]:
         """Returns available mesh tools."""
