@@ -171,7 +171,7 @@ sys.exit(1)
     local i
     for ((i=0; i<timeout_s; i++)); do
       local output
-      output="$(timeout 15s docker run --rm -v "${MESH_SOCKET_DIR}:/sockets" -v "$(pwd)/bin/mcp-client:/mcp-client" python:3.12 /mcp-client -socket "/sockets/node-${idx}.sock" 2>/dev/null)"
+      output="$(timeout 15s docker run --rm --network "${MESH_NETWORK}" -v "$(pwd)/bin/mcp-client:/mcp-client" python:3.12 /mcp-client -url "http://sam-node-${idx}:8080/" 2>/dev/null)"
       echo "[$(date +%T)] Node ${idx} get_mesh_info raw output: ${output}"
       local connected
       connected="$(echo "${output}" | jq -r --arg peer "$target_peer" '.connected_peers | index($peer) != null')"
@@ -191,7 +191,7 @@ sys.exit(1)
     local i
     for ((i=0; i<timeout_s; i++)); do
       local output
-      output="$(timeout 15s docker run --rm -v "${MESH_SOCKET_DIR}:/sockets" -v "$(pwd)/bin/mcp-client:/mcp-client" python:3.12 /mcp-client -socket "/sockets/node-${idx}.sock" 2>/dev/null)"
+      output="$(timeout 15s docker run --rm --network "${MESH_NETWORK}" -v "$(pwd)/bin/mcp-client:/mcp-client" python:3.12 /mcp-client -url "http://sam-node-${idx}:8080/" 2>/dev/null)"
       echo "[$(date +%T)] Node ${idx} get_mesh_info raw output: ${output}"
       local connected
       connected="$(echo "${output}" | jq -r --arg peer "$target_peer" '.connected_peers | index($peer) != null')"

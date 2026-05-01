@@ -16,7 +16,7 @@ class SamClient:
 
     async def connect(self):
         """Connects to the SAM node via SSE."""
-        self._sse_cm = sse_client(self.server_url)
+        self._sse_cm = sse_client(self.server_url, headers={"Accept": "application/json, text/event-stream"})
         read_stream, write_stream = await self._sse_cm.__aenter__()
         self.session = ClientSession(read_stream, write_stream)
         await self.session.__aenter__()

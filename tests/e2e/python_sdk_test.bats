@@ -38,14 +38,14 @@ teardown() {
     -v "$(pwd)/sam-mcp-python:/sam-mcp-python" \
     -e PYTHONPATH=/sam-mcp-python/src \
     python:3.12 \
-    bash -c 'pip install mcp >/dev/null && python3 -c "
+    bash -c 'pip install mcp && python3 -c "
 import asyncio
 from sam_mcp.client import SamClient
 import os
 import sys
 
 async def main():
-    os.environ[\"SAM_MCP_URL\"] = \"http://sam-node-1:8080/\"
+    os.environ[\"SAM_MCP_URL\"] = \"http://sam-node-1:8080/mcp\"
     try:
         async with SamClient() as client:
             # Test get_tools
