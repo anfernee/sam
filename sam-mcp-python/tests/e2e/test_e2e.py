@@ -3,7 +3,6 @@ import os
 import subprocess
 import time
 import pytest
-import pytest_asyncio
 from sam_mcp.client import SamClient
 
 @pytest.fixture(scope="session")
@@ -19,72 +18,70 @@ def sam_node_binary():
     return bin_path
 
 @pytest.fixture(scope="function")
-def sam_node(sam_node_binary):
+def sam_node(sam_node_binary, tmp_path):
     """Spins up a sam-node instance for testing."""
-    socket_path = f"/tmp/sam-test-mcp-{os.getpid()}.sock"
-    if os.path.exists(socket_path):
-        os.remove(socket_path)
-        
-    # Create directory if not exists
-    os.makedirs(os.path.dirname(socket_path), exist_ok=True)
+    log_file_path = tmp_path / "node.log"
+    log_file = open(log_file_path, "w")
     
-    # Run sam-node with a dummy JWT and custom socket path.
-    # We might need to pass more flags if it requires a hub, but let's try minimal first.
+    # Run sam-node with a dummy JWT and custom TCP address (let it choose free port).
     process = subprocess.Popen(
-        [sam_node_binary, "run", "--mcp-socket", socket_path, "--jwt", "dummy-token"],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        [sam_node_binary, "run", "--mcp-addr", "127.0.0.1:0", "--jwt", "dummy-token", "--hub", "127.0.0.1:8080"],
+        stdout=log_file,
+        stderr=log_file,
     )
     
-    # Wait for the socket file to appear
-    connected = False
+    # Wait for the log file to contain the bound address
+    mcp_addr = None
     for _ in range(20):
-        if os.path.exists(socket_path):
-            connected = True
-            break
+        if os.path.exists(log_file_path):
+            with open(log_file_path, "r") as f:
+                content = f.read()
+                if "Starting MCP server on TCP address " in content:
+                    parts = content.split("Starting MCP server on TCP address ")
+                    if len(parts) > 1:
+                        mcp_addr = parts[1].split("\n")[0].strip()
+                        break
         time.sleep(0.5)
         
-    if not connected:
+    if not mcp_addr:
         process.kill()
-        stdout, stderr = process.communicate()
-        pytest.fail(f"sam-node failed to create socket. Stdout: {stdout.decode()}, Stderr: {stderr.decode()}")
+        log_file.close()
+        with open(log_file_path, "r") as f:
+            log_content = f.read()
+        pytest.fail(f"sam-node failed to print bound address. Log content: {log_content}")
         
-    yield socket_path
+    yield mcp_addr
     
     process.terminate()
     try:
         process.wait(timeout=5)
     except subprocess.TimeoutExpired:
         process.kill()
-        
-    if os.path.exists(socket_path):
-        os.remove(socket_path)
+    log_file.close()
 
 @pytest.mark.asyncio
 async def test_e2e_get_tools(sam_node):
     """Verifies that we can connect to the real node and get tools."""
-    os.environ["SAM_MCP_SOCKET"] = sam_node
+    os.environ["SAM_MCP_URL"] = f"http://{sam_node}/"
     
     async with SamClient() as client:
         tools = await client.get_tools()
         assert isinstance(tools, list)
-        # Even if empty, it should be a list
         print(f"Received tools: {tools}")
         
 @pytest.mark.asyncio
 async def test_e2e_call_echo_tool(sam_node):
     """Verifies that we can call a tool on the real node."""
-    os.environ["SAM_MCP_SOCKET"] = sam_node
+    os.environ["SAM_MCP_URL"] = f"http://{sam_node}/"
     
     async with SamClient() as client:
-        # Assuming the node has an 'echo' or similar built-in tool or returns error gracefully
         try:
-            result = await client.call_tool("echo", {"message": "hello"})
+            result = await client.call_tool("get_mesh_info", {})
             print(f"Tool result: {result}")
+            assert "hub_peer_id" in str(result).lower() or "peers" in str(result).lower()
         except Exception as e:
-            # If 'echo' doesn't exist, we might get a JSON-RPC error, which is also a valid E2E interaction
-            print(f"Tool call failed as expected if missing: {e}")
-            # If it's a connection error, that's a failure. If it's a method not found, that's a success for the pipeline.
+            print(f"Tool call failed: {e}")
+            # If it's a method not found, that's also a valid interaction verifying the pipeline
             if "Method not found" in str(e) or "error" in str(e).lower():
                 pass
             else:
