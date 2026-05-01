@@ -31,7 +31,11 @@ func TestConnectionGater(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer func() {
+		if err := store.Close(); err != nil {
+			t.Logf("failed to close store: %v", err)
+		}
+	}()
 
 	cache, err := lru.New[string, int64](100)
 	if err != nil {
@@ -67,13 +71,7 @@ func TestConnectionGater(t *testing.T) {
 	if gater.InterceptPeerDial(peer2) {
 		t.Errorf("expected InterceptPeerDial to deny peer2 (in revoked cache)")
 	}
-	if !gater.InterceptSecured(network.DirInbound, peer2, nil) {
-		// Wait, InterceptSecured should ALSO deny it!
-		// Let's check my implementation of InterceptSecured in task 21!
-		// I added check for revoked cache there too!
-		// So it should return false!
-	}
-	// Let's fix the assertion to expect false!
+
 	if gater.InterceptSecured(network.DirInbound, peer2, nil) {
 		t.Errorf("expected InterceptSecured to deny peer2 (in revoked cache)")
 	}
