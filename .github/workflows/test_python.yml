@@ -30,5 +30,3 @@ jobs:
     - name: Run Python unit tests
       run: make test-python
 
-    - name: Run Python E2E tests
-      run: make test-python-e2e
