@@ -63,7 +63,7 @@ func main() {
 	}, nil)
 
 	// Connect to server using the URL
-	session, err := client.Connect(ctx, &mcp.StreamableClientTransport{Endpoint: *serverURL}, nil)
+	session, err := client.Connect(ctx, &mcp.SSEClientTransport{Endpoint: *serverURL}, nil)
 	if err != nil {
 		log.Fatalf("Failed to connect: %v", err)
 	}

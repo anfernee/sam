@@ -30,7 +30,7 @@ func TestMCPHandler_HTTP(t *testing.T) {
 
 	client := &http.Client{}
 
-	// Test GET on root
+	// Test GET on root (should be 404 now)
 	req, err := http.NewRequest("GET", ts.URL, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -42,14 +42,12 @@ func TestMCPHandler_HTTP(t *testing.T) {
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	// We expect OK or MethodNotAllowed depending on exact handler implementation,
-	// but it should not be 404 or 500.
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusMethodNotAllowed && resp.StatusCode != http.StatusBadRequest {
-		t.Errorf("Expected status OK, MethodNotAllowed, or BadRequest on root, got %d", resp.StatusCode)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("Expected status NotFound on root, got %d", resp.StatusCode)
 	}
 
-	// Test GET on /mcp
-	req2, err := http.NewRequest("GET", ts.URL+"/mcp", nil)
+	// Test GET on /mcp/events
+	req2, err := http.NewRequest("GET", ts.URL+"/mcp/events", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +58,7 @@ func TestMCPHandler_HTTP(t *testing.T) {
 	}
 	defer func() { _ = resp2.Body.Close() }()
 
-	if resp2.StatusCode != http.StatusOK && resp2.StatusCode != http.StatusMethodNotAllowed && resp2.StatusCode != http.StatusBadRequest {
-		t.Errorf("Expected status OK, MethodNotAllowed, or BadRequest on /mcp, got %d", resp2.StatusCode)
+	if resp2.StatusCode != http.StatusOK && resp2.StatusCode != http.StatusBadRequest {
+		t.Errorf("Expected status OK or BadRequest on /mcp/events, got %d", resp2.StatusCode)
 	}
 }

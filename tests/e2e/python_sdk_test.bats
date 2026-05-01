@@ -15,6 +15,10 @@ setup() {
 }
 
 teardown() {
+  if [[ "${BATS_TEST_COMPLETED:-0}" -ne 1 ]]; then
+    echo "Node 1 logs on failure (filtered):"
+    docker logs "${MESH_PREFIX}-node-1" 2>&1 | grep -i -E 'mcp|request|error|fatal|panic' || true
+  fi
   mesh_cleanup_env
 }
 
@@ -38,34 +42,12 @@ teardown() {
     -v "$(pwd)/sam-mcp-python:/sam-mcp-python" \
     -e PYTHONPATH=/sam-mcp-python/src \
     python:3.12 \
-    bash -c 'pip install mcp && python3 -c "
-import asyncio
-from sam_mcp.client import SamClient
-import os
-import sys
-
-async def main():
-    os.environ[\"SAM_MCP_URL\"] = \"http://sam-node-1:8080/mcp\"
-    try:
-        async with SamClient() as client:
-            # Test get_tools
-            tools = await client.get_tools()
-            print(f\"TOOLS_COUNT:{len(tools)}\")
-            
-            # Test call_tool (get_mesh_info is a standard tool in sam-node)
-            result = await client.call_tool(\"get_mesh_info\", {})
-            print(f\"CALL_RESULT:{result}\")
-            
-            sys.exit(0)
-    except BaseException as e:
-        import traceback
-        print(f\"ERROR:{e}\")
-        traceback.print_exc()
-        sys.exit(1)
-
-asyncio.run(main())
-"'
+    bash -c 'pip install mcp httpx && python3 /sam-mcp-python/test_client.py'
   echo "Python SDK output: $output"
+  if [[ "$status" -ne 0 ]]; then
+    echo "Node 1 logs:"
+    docker logs "${node1_name}"
+  fi
   [[ "$status" -eq 0 ]]
   [[ "$output" == *"TOOLS_COUNT:"* ]]
   [[ "$output" == *"CALL_RESULT:"* ]]
