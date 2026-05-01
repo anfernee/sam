@@ -16,6 +16,8 @@ package main
 
 import (
 	"context"
+	"os"
+	"strings"
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
@@ -35,7 +37,6 @@ import (
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
-	"github.com/libp2p/go-libp2p/core/protocol"
 	"github.com/libp2p/go-libp2p/p2p/discovery/routing"
 	"github.com/libp2p/go-libp2p/p2p/discovery/util"
 	"github.com/libp2p/go-libp2p/p2p/net/connmgr"
@@ -47,7 +48,18 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-const AuthProtocolID = protocol.ID("/sam/auth/1.0.0")
+const (
+	// Cache sizes
+	RateLimiterSize       = 1000
+	RevocationCacheSize   = 10000
+	VerificationCacheSize = 1000
+
+	// Freshness checks
+	FreshnessThreshold = 5 * time.Minute
+
+	// Key pruning
+	KeyPruningInterval = 1 * time.Hour
+)
 
 type TrustedKey struct {
 	Key        ed25519.PublicKey
@@ -89,16 +101,16 @@ func NewSamNode(ctx context.Context, privKey crypto.PrivKey, hubPubKey ed25519.P
 	}
 
 	var err error
-	node.rateLimiter, err = NewPeerRateLimiter(1000)
+	node.rateLimiter, err = NewPeerRateLimiter(RateLimiterSize)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create rate limiter: %w", err)
 	}
-	node.revokedPeers, err = lru.New[string, int64](10000)
+	node.revokedPeers, err = lru.New[string, int64](RevocationCacheSize)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create revocation cache: %w", err)
 	}
 
-	node.verificationCache, err = lru.New[string, string](1000)
+	node.verificationCache, err = lru.New[string, string](VerificationCacheSize)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create verification cache: %w", err)
 	}
@@ -201,15 +213,15 @@ func NewSamNode(ctx context.Context, privKey crypto.PrivKey, hubPubKey ed25519.P
 
 	interval, err := time.ParseDuration(discoveryInterval)
 	if err != nil {
-		logger.Warnf("[Discovery] Invalid discovery interval '%s', using default 2s: %v", discoveryInterval, err)
-		interval = 2 * time.Second
+		logger.Warnf("[Discovery] Invalid discovery interval '%s', using default %s: %v", discoveryInterval, DefaultDiscoveryInterval, err)
+		interval, _ = time.ParseDuration(DefaultDiscoveryInterval)
 	}
 
 	// Start DHT Discovery
 	go node.startDiscovery(ctx, meshID, interval)
 
 	// Layer 3: Open the Lobby Door (Auth Protocol is bypassed by Layer 4)
-	node.Host.SetStreamHandler(AuthProtocolID, node.HandleAuthHandshake)
+	node.Host.SetStreamHandler(api.AuthProtocolID, node.HandleAuthHandshake)
 
 	// Layer 3: Wire up MCP handler wrapped in middleware
 	node.Host.SetStreamHandler(api.MCPProtocolID, node.WithBiscuitAuth(node.HandleMCPStream))
@@ -218,6 +230,63 @@ func NewSamNode(ctx context.Context, privKey crypto.PrivKey, hubPubKey ed25519.P
 	node.startKeyPruning(ctx, keyGracePeriod)
 
 	return node, nil
+}
+
+func (n *SamNode) StartRenewalLoop(ctx context.Context, tokenURL, clientID, clientSecret, jwtPath string) {
+	go func() {
+		for {
+			var renewAfter = DefaultRenewalFallback // Default fallback
+
+			exp, err := n.Store.LoadIdentityExpiration()
+			if err == nil && exp > 0 {
+				expTime := time.Unix(exp, 0)
+				duration := time.Until(expTime)
+				if duration > RenewalThreshold {
+					renewAfter = duration - RenewalBuffer
+				} else if duration > 0 {
+					renewAfter = duration / 2
+				} else {
+					renewAfter = 1 * time.Minute
+				}
+			}
+
+			fmt.Printf("[Auth] Next renewal in %v\n", renewAfter)
+			timer := time.NewTimer(renewAfter)
+
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return
+			case <-timer.C:
+				fmt.Println("Renewing enrollment...")
+				var newJWT string
+				if tokenURL != "" {
+					var err error
+					newJWT, err = n.FetchJWT(ctx, tokenURL, clientID, clientSecret)
+					if err != nil {
+						fmt.Printf("Failed to fetch JWT for renewal: %v\n", err)
+						continue
+					}
+				} else if jwtPath != "" {
+					data, err := os.ReadFile(jwtPath)
+					if err != nil {
+						fmt.Printf("Failed to read JWT file for renewal: %v\n", err)
+						continue
+					}
+					newJWT = strings.TrimSpace(string(data))
+				} else {
+					fmt.Println("No credentials available for renewal.")
+					continue
+				}
+
+				if err := n.Enroll(ctx, newJWT); err != nil {
+					fmt.Printf("Renewal enrollment failed: %v\n", err)
+				} else {
+					fmt.Println("Enrollment renewed successfully.")
+				}
+			}
+		}
+	}()
 }
 
 // listenForHubEvents listens to the topic established by the Hub
@@ -259,39 +328,61 @@ func (n *SamNode) listenForHubEvents(ctx context.Context) {
 			continue
 		}
 
-		// Freshness check: reject events older than 5 minutes to prevent replay attacks
-		if time.Since(time.Unix(event.Timestamp, 0)) > 5*time.Minute {
+		// Freshness check: reject events older than the threshold to prevent replay attacks
+		if time.Since(time.Unix(event.Timestamp, 0)) > FreshnessThreshold {
 			logger.Warnf("[Mesh Event] Dropping stale event from %s (timestamp: %d)", msg.ReceivedFrom, event.Timestamp)
 			continue
 		}
 
-		n.mu.Lock()
 		switch event.Type {
 		case api.MeshEvent_JOIN:
-			if event.PeerId != n.Host.ID().String() {
-				n.knownPeers[event.PeerId] = true
-			}
-			logger.Infof("[Mesh Event] Peer joined: %s", event.PeerId)
+			n.handleJoinEvent(&event)
 		case api.MeshEvent_EXIT:
-			delete(n.knownPeers, event.PeerId)
-			logger.Infof("[Mesh Event] Peer left: %s", event.PeerId)
+			n.handleExitEvent(&event)
 		case api.MeshEvent_BANNED:
-			delete(n.knownPeers, event.PeerId)
-			logger.Infof("[Mesh Event] Peer banned: %s", event.PeerId)
-
-			n.revokedPeers.Add(event.PeerId, event.Timestamp)
-			// close all streams from this peer
-			if p, err := peer.Decode(event.PeerId); err == nil {
-				_ = n.Host.Network().ClosePeer(p)
-			}
+			n.handleBannedEvent(&event)
 		case api.MeshEvent_KEY_ROTATION:
-			logger.Infof("[Mesh Event] Key rotation received")
-			n.keysMu.Lock()
-			n.trustedKeys = append(n.trustedKeys, TrustedKey{Key: ed25519.PublicKey(event.NewPublicKey), ReceivedAt: time.Now()})
-			n.keysMu.Unlock()
+			n.handleKeyRotationEvent(&event)
 		}
-		n.mu.Unlock()
 	}
+}
+
+func (n *SamNode) handleJoinEvent(event *api.MeshEvent) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.Host == nil || event.PeerId != n.Host.ID().String() {
+		n.knownPeers[event.PeerId] = true
+	}
+	logger.Infof("[Mesh Event] Peer joined: %s", event.PeerId)
+}
+
+func (n *SamNode) handleExitEvent(event *api.MeshEvent) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	delete(n.knownPeers, event.PeerId)
+	logger.Infof("[Mesh Event] Peer left: %s", event.PeerId)
+}
+
+func (n *SamNode) handleBannedEvent(event *api.MeshEvent) {
+	n.mu.Lock()
+	delete(n.knownPeers, event.PeerId)
+	n.mu.Unlock()
+
+	logger.Infof("[Mesh Event] Peer banned: %s", event.PeerId)
+
+	n.revokedPeers.Add(event.PeerId, event.Timestamp)
+	if p, err := peer.Decode(event.PeerId); err == nil {
+		if n.Host != nil {
+			_ = n.Host.Network().ClosePeer(p)
+		}
+	}
+}
+
+func (n *SamNode) handleKeyRotationEvent(event *api.MeshEvent) {
+	logger.Infof("[Mesh Event] Key rotation received")
+	n.keysMu.Lock()
+	n.trustedKeys = append(n.trustedKeys, TrustedKey{Key: ed25519.PublicKey(event.NewPublicKey), ReceivedAt: time.Now()})
+	n.keysMu.Unlock()
 }
 
 func (n *SamNode) startKeyPruning(ctx context.Context, gracePeriod time.Duration) {
@@ -299,7 +390,7 @@ func (n *SamNode) startKeyPruning(ctx context.Context, gracePeriod time.Duration
 		return
 	}
 	go func() {
-		ticker := time.NewTicker(1 * time.Hour)
+		ticker := time.NewTicker(KeyPruningInterval)
 		defer ticker.Stop()
 		for {
 			select {
@@ -444,73 +535,9 @@ func (n *SamNode) HandleAuthHandshake(s network.Stream) {
 		return
 	}
 
-	// Check verification cache
-	tokenHash := sha256.Sum256(exchange.Biscuit)
-	hashStr := hex.EncodeToString(tokenHash[:]) + ":" + remotePeer.String()
-
-	if pubKeyStr, ok := n.verificationCache.Get(hashStr); ok {
-		n.keysMu.RLock()
-		keys := n.trustedKeys
-		n.keysMu.RUnlock()
-
-		trusted := false
-		for _, tk := range keys {
-			if hex.EncodeToString(tk.Key) == pubKeyStr {
-				trusted = true
-				break
-			}
-		}
-		if trusted {
-			logger.Infof("[AuthN] Token cache hit for %s", remotePeer)
-			return
-		}
-	}
-
-	// 2. Unmarshal and verify token format
-	b, err := biscuit.Unmarshal(exchange.Biscuit)
+	b, err := n.verifyBiscuit(exchange.Biscuit, remotePeer)
 	if err != nil {
-		logger.Warnf("[AuthN] Malformed biscuit from %s", remotePeer)
-		return
-	}
-
-	authorized := false
-	var successfulKey ed25519.PublicKey
-	// 3. Verify signature chain against the trusted Hub keys.
-	n.keysMu.RLock()
-	keys := n.trustedKeys
-	n.keysMu.RUnlock()
-
-	for _, tk := range keys {
-		if len(tk.Key) != ed25519.PublicKeySize {
-			continue
-		}
-		authorizer, err := b.Authorizer(tk.Key)
-		if err != nil {
-			continue
-		}
-
-		// Admission only requires a valid signature, so allow if true
-		rule, err := parser.FromStringPolicy("allow if true")
-		if err != nil {
-			logger.Errorf("[AuthN] Failed to parse rule: %v", err)
-			continue
-		}
-		authorizer.AddPolicy(rule)
-
-		if err := authorizer.Authorize(); err == nil {
-			authorized = true
-			successfulKey = tk.Key
-			break
-		}
-	}
-
-	if authorized {
-		// Cache successful verification
-		n.verificationCache.Add(hashStr, hex.EncodeToString(successfulKey))
-	}
-
-	if !authorized {
-		logger.Warnf("[AuthN] Authorization failed for %s: no valid key found", remotePeer)
+		logger.Warnf("[AuthN] Authorization failed for %s: %v", remotePeer, err)
 		return
 	}
 
@@ -545,4 +572,53 @@ func (n *SamNode) HandleAuthHandshake(s network.Stream) {
 	}
 
 	logger.Infof("[AuthN] Successfully authenticated peer %s (%s)", remotePeer, identity.UserEmail)
+}
+
+func (n *SamNode) verifyBiscuit(biscuitData []byte, remotePeer peer.ID) (*biscuit.Biscuit, error) {
+	b, err := biscuit.Unmarshal(biscuitData)
+	if err != nil {
+		return nil, fmt.Errorf("malformed biscuit: %w", err)
+	}
+
+	tokenHash := sha256.Sum256(biscuitData)
+	hashStr := hex.EncodeToString(tokenHash[:]) + ":" + remotePeer.String()
+
+	if pubKeyStr, ok := n.verificationCache.Get(hashStr); ok {
+		n.keysMu.RLock()
+		keys := n.trustedKeys
+		n.keysMu.RUnlock()
+
+		for _, tk := range keys {
+			if hex.EncodeToString(tk.Key) == pubKeyStr {
+				return b, nil
+			}
+		}
+	}
+
+	n.keysMu.RLock()
+	keys := n.trustedKeys
+	n.keysMu.RUnlock()
+
+	for _, tk := range keys {
+		if len(tk.Key) != ed25519.PublicKeySize {
+			continue
+		}
+		authorizer, err := b.Authorizer(tk.Key)
+		if err != nil {
+			continue
+		}
+
+		rule, err := parser.FromStringPolicy("allow if true")
+		if err != nil {
+			continue
+		}
+		authorizer.AddPolicy(rule)
+
+		if err := authorizer.Authorize(); err == nil {
+			n.verificationCache.Add(hashStr, hex.EncodeToString(tk.Key))
+			return b, nil
+		}
+	}
+
+	return nil, fmt.Errorf("no valid key found")
 }

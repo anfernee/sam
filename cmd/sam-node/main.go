@@ -37,6 +37,18 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+const (
+	DefaultMeshName          = "public-mesh"
+	DefaultDiscoveryInterval = "2s"
+	DefaultHubURL            = "http://localhost:8080"
+	DefaultLocalPolicyFile   = "local_policy.yaml"
+
+	// Renewal timing defaults
+	DefaultRenewalFallback = 50 * time.Minute
+	RenewalBuffer          = 10 * time.Minute
+	RenewalThreshold       = 15 * time.Minute
+)
+
 var (
 	hubAddr     string
 	listenAddrs []string
@@ -88,7 +100,7 @@ func main() {
 			if err != nil {
 				logger.Fatalf("Failed to open store: %v", err)
 			}
-			
+
 			localPolicy, err := LoadLocalPolicy(localPolicyFile)
 			if err != nil {
 				logger.Fatalf("Failed to load local policy: %v", err)
@@ -202,91 +214,12 @@ func main() {
 			}
 
 			// Start renewal loop
-			go func() {
-				for {
-					var renewAfter = 50 * time.Minute // Default fallback
+			node.StartRenewalLoop(ctx, tokenURLFlag, clientIDFlag, clientSecretFlag, jwtPathFlag)
 
-					exp, err := node.Store.LoadIdentityExpiration()
-					if err == nil && exp > 0 {
-						expTime := time.Unix(exp, 0)
-						duration := time.Until(expTime)
-						// Renew 10 minutes before expiration if duration permits
-						if duration > 15*time.Minute {
-							renewAfter = duration - 10*time.Minute
-						} else if duration > 0 {
-							renewAfter = duration / 2 // half of remaining time
-						} else {
-							renewAfter = 1 * time.Minute // already expired or immediate
-						}
-					}
-
-					fmt.Printf("[Auth] Next renewal in %v\n", renewAfter)
-					timer := time.NewTimer(renewAfter)
-
-					select {
-					case <-ctx.Done():
-						timer.Stop()
-						return
-					case <-timer.C:
-						fmt.Println("Renewing enrollment...")
-						var newJWT string
-						if tokenURLFlag != "" {
-							var err error
-							newJWT, err = node.FetchJWT(ctx, tokenURLFlag, clientIDFlag, clientSecretFlag)
-							if err != nil {
-								fmt.Printf("Failed to fetch JWT for renewal: %v\n", err)
-								continue
-							}
-						} else if jwtPathFlag != "" {
-							data, err := os.ReadFile(jwtPathFlag)
-							if err != nil {
-								fmt.Printf("Failed to read JWT file for renewal: %v\n", err)
-								continue
-							}
-							newJWT = strings.TrimSpace(string(data))
-						} else {
-							fmt.Println("No credentials available for renewal.")
-							continue
-						}
-
-						if err := node.Enroll(ctx, newJWT); err != nil {
-							fmt.Printf("Renewal enrollment failed: %v\n", err)
-						} else {
-							fmt.Println("Enrollment renewed successfully.")
-						}
-					}
-				}
-			}()
-
-			node.Host.SetStreamHandler(AuthProtocolID, node.HandleAuthHandshake)
+			node.Host.SetStreamHandler(api.AuthProtocolID, node.HandleAuthHandshake)
 
 			// Start MCP Server
-			mcpHandler := NewMCPHandler(node)
-			go func() {
-				socketPath := mcpSocketFlag
-				if socketPath == "" {
-					socketPath = filepath.Join(dataDir, "mcp.sock")
-				}
-
-				// Remove old socket file if it exists
-				_ = os.Remove(socketPath)
-
-				listener, err := net.Listen("unix", socketPath)
-				if err != nil {
-					logger.Errorf("Failed to listen on Unix socket %s: %v", socketPath, err)
-					return
-				}
-				defer func() {
-					if err := listener.Close(); err != nil {
-						logger.Errorf("Failed to close listener: %v", err)
-					}
-				}()
-
-				fmt.Printf("Starting MCP server on Unix socket %s\n", socketPath)
-				if err := http.Serve(listener, mcpHandler); err != nil {
-					logger.Errorf("MCP server error: %v", err)
-				}
-			}()
+			startMCPServer(node, mcpSocketFlag, dataDir)
 
 			fmt.Printf("SAM Node Online.\nPeerID: %s\nListening on: %v\n", node.Host.ID(), node.Host.Addrs())
 
@@ -309,7 +242,7 @@ func main() {
 			if err != nil {
 				logger.Fatalf("Failed to open store: %v", err)
 			}
-			
+
 			localPolicy, err := LoadLocalPolicy(localPolicyFile)
 			if err != nil {
 				logger.Fatalf("Failed to load local policy: %v", err)
@@ -374,13 +307,13 @@ func main() {
 	runCmd.Flags().StringVar(&clientSecretFlag, "client-secret", os.Getenv("SAM_OIDC_SECRET"), "OIDC Client Secret for M2M")
 	runCmd.Flags().StringVar(&hubPublicKeyFlag, "hub-public-key", "", "Hub Public Key (32-byte Hex)")
 	runCmd.Flags().StringVar(&mcpSocketFlag, "mcp-socket", "", "Path to Unix domain socket for local MCP server (default: <datadir>/mcp.sock)")
-	runCmd.Flags().StringVar(&meshFlag, "mesh", "public-mesh", "Mesh federation name")
-	runCmd.Flags().StringVar(&discoveryIntervalFlag, "discovery-interval", "2s", "Polling interval for DHT discovery")
+	runCmd.Flags().StringVar(&meshFlag, "mesh", DefaultMeshName, "Mesh federation name")
+	runCmd.Flags().StringVar(&discoveryIntervalFlag, "discovery-interval", DefaultDiscoveryInterval, "Polling interval for DHT discovery")
 	runCmd.Flags().BoolVar(&enableRelayFlag, "enable-relay", false, "Allow this node to serve as a relay for others")
 	runCmd.Flags().StringVar(&logLevelFlag, "log-level", "info", "Log level (debug, info, warn, error)")
 	runCmd.Flags().DurationVar(&keyGracePeriodFlag, "key-grace-period", 24*time.Hour, "Key grace period for old keys (e.g. 24h)")
-	rootCmd.PersistentFlags().StringVar(&hubAddr, "hub", "http://localhost:8080", "Hub URL")
-	rootCmd.PersistentFlags().StringVar(&localPolicyFile, "local-policy", "local_policy.yaml", "Path to local_policy.yaml")
+	rootCmd.PersistentFlags().StringVar(&hubAddr, "hub", DefaultHubURL, "Hub URL")
+	rootCmd.PersistentFlags().StringVar(&localPolicyFile, "local-policy", DefaultLocalPolicyFile, "Path to local_policy.yaml")
 	rootCmd.PersistentFlags().StringVar(&tokenURLFlag, "token-url", "", "OIDC Token URL")
 
 	rootCmd.AddCommand(runCmd)
@@ -422,6 +355,35 @@ func getOrGenerateKey(s *Store) crypto.PrivKey {
 		logger.Fatalf("Corrupt key in store: %v", err)
 	}
 	return priv
+}
+
+func startMCPServer(node *SamNode, socketPath string, dataDir string) {
+	mcpHandler := NewMCPHandler(node)
+	go func() {
+		if socketPath == "" {
+			socketPath = filepath.Join(dataDir, "mcp.sock")
+		}
+
+		if err := os.Remove(socketPath); err != nil && !os.IsNotExist(err) {
+			logger.Errorf("Failed to remove old socket %s: %v", socketPath, err)
+		}
+
+		listener, err := net.Listen("unix", socketPath)
+		if err != nil {
+			logger.Errorf("Failed to listen on Unix socket %s: %v", socketPath, err)
+			return
+		}
+		defer func() {
+			if err := listener.Close(); err != nil {
+				logger.Errorf("Failed to close listener: %v", err)
+			}
+		}()
+
+		fmt.Printf("Starting MCP server on Unix socket %s\n", socketPath)
+		if err := http.Serve(listener, mcpHandler); err != nil {
+			logger.Errorf("MCP server error: %v", err)
+		}
+	}()
 }
 
 func (n *SamNode) Enroll(ctx context.Context, jwt string) error {
@@ -484,8 +446,6 @@ func (n *SamNode) Enroll(ctx context.Context, jwt string) error {
 	n.keysMu.Lock()
 	n.trustedKeys = append(n.trustedKeys, TrustedKey{Key: ed25519.PublicKey(resp.HubPublicKey), ReceivedAt: time.Now()})
 	n.keysMu.Unlock()
-
-
 
 	// Add known peers from response
 	n.mu.Lock()

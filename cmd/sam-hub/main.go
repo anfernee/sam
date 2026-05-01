@@ -38,6 +38,7 @@ import (
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
+	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/p2p/net/connmgr"
 	"github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/relay"
 	libp2ptls "github.com/libp2p/go-libp2p/p2p/security/tls"
@@ -62,6 +63,16 @@ const (
 	LowWaterMark    = 100
 	HighWaterMark   = 400
 	ConnGracePeriod = 1 * time.Minute
+
+	// Timeouts
+	JWTVerificationTimeout = 10 * time.Second
+
+	// Defaults
+	DefaultOIDCIssuer  = "https://accounts.google.com"
+	DefaultMeshName    = "public-mesh"
+	DefaultPolicyFile  = "policies.yaml"
+	DefaultKeysDBPath  = "keys.db"
+	DefaultBindAddress = ":9090"
 )
 
 var isHubReady atomic.Bool
@@ -239,184 +250,21 @@ func (h *Hub) handleEnroll(s network.Stream) {
 		return
 	}
 
-	// Parse JWT unverified to get issuer and audience
-	jwtParser := jwt.Parser{}
-	jwtToken, _, err := jwtParser.ParseUnverified(req.Jwt, jwt.MapClaims{})
+	ctx, cancel := context.WithTimeout(context.Background(), JWTVerificationTimeout)
+	defer cancel()
+	claims, token, err := h.parseAndVerifyJWT(ctx, req.Jwt)
 	if err != nil {
-		logger.Errorw("Failed to parse JWT in enrollment", "peer_id", remotePeer, "error", err)
+		logger.Errorw("JWT verification failed", "peer_id", remotePeer, "error", err)
 		samHubEnrollmentTotal.WithLabelValues("failed").Inc()
-		h.sendEnrollResponse(s, nil, "Failed to parse JWT", 0, nil, nil)
-		return
-	}
-	claims, ok := jwtToken.Claims.(jwt.MapClaims)
-	if !ok {
-		logger.Warnw("Invalid JWT claims in enrollment", "peer_id", remotePeer)
-		samHubEnrollmentTotal.WithLabelValues("failed").Inc()
-		h.sendEnrollResponse(s, nil, "Invalid JWT claims", 0, nil, nil)
-		return
-	}
-	iss, _ := claims["iss"].(string)
-
-	var aud string
-	switch a := claims["aud"].(type) {
-	case string:
-		aud = a
-	case []any:
-		if len(a) > 0 {
-			aud, _ = a[0].(string)
-		}
-	}
-
-	if aud == "" {
-		logger.Warnw("Missing aud claim in enrollment", "peer_id", remotePeer)
-		samHubEnrollmentTotal.WithLabelValues("failed").Inc()
-		h.sendEnrollResponse(s, nil, "Missing aud claim", 0, nil, nil)
+		h.sendEnrollResponse(s, nil, err.Error(), 0, nil, nil)
 		return
 	}
 
-	alg, ok := jwtToken.Header["alg"].(string)
-	if !ok || alg == "" {
-		logger.Warnw("Missing alg header in enrollment", "peer_id", remotePeer)
-		samHubEnrollmentTotal.WithLabelValues("failed").Inc()
-		h.sendEnrollResponse(s, nil, "Missing alg header", 0, nil, nil)
-		return
-	}
-
-	provider, ok := h.Providers[iss]
-	if !ok {
-		logger.Warnw("Unknown issuer in enrollment", "peer_id", remotePeer, "issuer", iss)
-		samHubEnrollmentTotal.WithLabelValues("failed").Inc()
-		h.sendEnrollResponse(s, nil, fmt.Sprintf("Unknown issuer: %s", iss), 0, nil, nil)
-		return
-	}
-
-	verifier := provider.Verifier(&oidc.Config{ClientID: clientID})
-
-	token, err := verifier.Verify(context.Background(), req.Jwt)
+	biscuitData, err := h.mintBiscuitToken(claims, token, remotePeer)
 	if err != nil {
-		logger.Errorw("JWT validation failed in enrollment", "peer_id", remotePeer, "error", err)
-		samHubEnrollmentTotal.WithLabelValues("failed").Inc()
-		h.sendEnrollResponse(s, nil, fmt.Sprintf("JWT validation failed: %v", err), 0, nil, nil)
-		return
-	}
-
-	// Strictly enforce aud and alg after verification
-	if alg == "none" {
-		logger.Warnw("Invalid alg claim in enrollment", "peer_id", remotePeer, "alg", alg)
-		samHubEnrollmentTotal.WithLabelValues("failed").Inc()
-		h.sendEnrollResponse(s, nil, "Invalid alg claim", 0, nil, nil)
-		return
-	}
-	logger.Infow("JWT validated", "peer_id", remotePeer, "aud", aud, "alg", alg)
-
-	var roles []string
-	if rolesAny, ok := claims["roles"].([]any); ok {
-		for _, r := range rolesAny {
-			if str, ok := r.(string); ok {
-				roles = append(roles, str)
-			}
-		}
-	}
-
-	builder := biscuit.NewBuilder(h.KeyRing.GetCurrentKey())
-
-	if err := builder.AddAuthorityFact(biscuit.Fact{Predicate: biscuit.Predicate{
-		Name: "expiration",
-		IDs:  []biscuit.Term{biscuit.Date(token.Expiry)},
-	}}); err != nil {
-		logger.Errorw("Failed to add expiration fact to biscuit", "peer_id", remotePeer, "error", err)
+		logger.Errorw("Biscuit minting failed", "peer_id", remotePeer, "error", err)
 		samHubEnrollmentTotal.WithLabelValues("failed").Inc()
 		h.sendEnrollResponse(s, nil, "Failed to mint biscuit", 0, nil, nil)
-		return
-	}
-
-	if err := builder.AddAuthorityFact(biscuit.Fact{Predicate: biscuit.Predicate{
-		Name: "node",
-		IDs:  []biscuit.Term{biscuit.String(remotePeer.String())},
-	}}); err != nil {
-		logger.Errorw("Failed to add node fact to biscuit", "peer_id", remotePeer, "error", err)
-		samHubEnrollmentTotal.WithLabelValues("failed").Inc()
-		h.sendEnrollResponse(s, nil, "Failed to mint biscuit", 0, nil, nil)
-		return
-	}
-
-	if err := builder.AddAuthorityFact(biscuit.Fact{Predicate: biscuit.Predicate{
-		Name: "client_peer_id",
-		IDs:  []biscuit.Term{biscuit.String(remotePeer.String())},
-	}}); err != nil {
-		logger.Errorw("Failed to add client_peer_id fact to biscuit", "peer_id", remotePeer, "error", err)
-		samHubEnrollmentTotal.WithLabelValues("failed").Inc()
-		h.sendEnrollResponse(s, nil, "Failed to mint biscuit", 0, nil, nil)
-		return
-	}
-
-	for _, role := range roles {
-		if err := builder.AddAuthorityFact(biscuit.Fact{Predicate: biscuit.Predicate{
-			Name: "group",
-			IDs:  []biscuit.Term{biscuit.String(role)},
-		}}); err != nil {
-			logger.Errorw("Failed to add group fact to biscuit", "peer_id", remotePeer, "role", role, "error", err)
-			samHubEnrollmentTotal.WithLabelValues("failed").Inc()
-			h.sendEnrollResponse(s, nil, "Failed to mint biscuit", 0, nil, nil)
-			return
-		}
-
-		if h.Policy != nil {
-			if rolePolicy, ok := h.Policy.Roles[role]; ok {
-				for _, tool := range rolePolicy.MCP.AllowedTools {
-					if err := builder.AddAuthorityFact(biscuit.Fact{Predicate: biscuit.Predicate{
-						Name: api.FactMCPTool,
-						IDs:  []biscuit.Term{biscuit.String(tool)},
-					}}); err != nil {
-						logger.Errorw("Failed to add MCP tool fact to biscuit", "peer_id", remotePeer, "tool", tool, "error", err)
-					}
-				}
-				for _, target := range rolePolicy.Network.AllowedTargets {
-					if err := builder.AddAuthorityFact(biscuit.Fact{Predicate: biscuit.Predicate{
-						Name: api.FactNetworkTarget,
-						IDs:  []biscuit.Term{biscuit.String(target)},
-					}}); err != nil {
-						logger.Errorw("Failed to add network target fact to biscuit", "peer_id", remotePeer, "target", target, "error", err)
-					}
-				}
-				for _, customFact := range rolePolicy.CustomDatalog {
-					trimmed := strings.TrimRight(strings.TrimSpace(customFact), ";")
-					if trimmed == "" {
-						continue
-					}
-					func() {
-						defer func() {
-							if r := recover(); r != nil {
-								logger.Errorw("Panic parsing custom fact", "peer_id", remotePeer, "fact", trimmed, "recover", r)
-							}
-						}()
-						fact, err := parser.FromStringFact(trimmed)
-						if err != nil {
-							logger.Errorw("Failed to parse custom fact", "peer_id", remotePeer, "fact", trimmed, "error", err)
-							return
-						}
-						if err := builder.AddAuthorityFact(fact); err != nil {
-							logger.Errorw("Failed to add custom fact to biscuit", "peer_id", remotePeer, "fact", trimmed, "error", err)
-						}
-					}()
-				}
-			}
-		}
-	}
-
-	t, err := builder.Build()
-	if err != nil {
-		logger.Errorw("Failed to build biscuit", "peer_id", remotePeer, "error", err)
-		samHubEnrollmentTotal.WithLabelValues("failed").Inc()
-		h.sendEnrollResponse(s, nil, "Failed to build biscuit", 0, nil, nil)
-		return
-	}
-
-	biscuitData, err := t.Serialize()
-	if err != nil {
-		logger.Errorw("Failed to serialize biscuit", "peer_id", remotePeer, "error", err)
-		samHubEnrollmentTotal.WithLabelValues("failed").Inc()
-		h.sendEnrollResponse(s, nil, "Failed to serialize biscuit", 0, nil, nil)
 		return
 	}
 
@@ -429,11 +277,16 @@ func (h *Hub) handleEnroll(s network.Stream) {
 	delete(h.gater.pending, remotePeer)
 
 	// Collect authenticated peers
-	var knownPeers []string
+	var authPeers []peer.ID
 	for p := range h.gater.authenticated {
-		knownPeers = append(knownPeers, p.String())
+		authPeers = append(authPeers, p)
 	}
 	h.gater.mu.Unlock()
+
+	var knownPeers []string
+	for _, p := range authPeers {
+		knownPeers = append(knownPeers, p.String())
+	}
 
 	policies := []string{
 		`allow if operation($op)`,
@@ -491,6 +344,153 @@ func (h *Hub) sendEnrollResponse(s network.Stream, biscuitToken []byte, errMsg s
 	if err := writer.WriteMsg(data); err != nil {
 		logger.Errorf("[Enroll] Failed to write response: %v", err)
 	}
+}
+
+func (h *Hub) parseAndVerifyJWT(ctx context.Context, jwtStr string) (jwt.MapClaims, *oidc.IDToken, error) {
+	jwtParser := jwt.Parser{}
+	jwtToken, _, err := jwtParser.ParseUnverified(jwtStr, jwt.MapClaims{})
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to parse JWT: %w", err)
+	}
+	claims, ok := jwtToken.Claims.(jwt.MapClaims)
+	if !ok {
+		return nil, nil, fmt.Errorf("invalid JWT claims")
+	}
+	iss, _ := claims["iss"].(string)
+
+	var aud string
+	switch a := claims["aud"].(type) {
+	case string:
+		aud = a
+	case []any:
+		if len(a) > 0 {
+			aud, _ = a[0].(string)
+		}
+	}
+
+	if aud == "" {
+		return nil, nil, fmt.Errorf("missing aud claim")
+	}
+
+	alg, ok := jwtToken.Header["alg"].(string)
+	if !ok || alg == "" {
+		return nil, nil, fmt.Errorf("missing alg header")
+	}
+
+	provider, ok := h.Providers[iss]
+	if !ok {
+		return nil, nil, fmt.Errorf("unknown issuer: %s", iss)
+	}
+
+	verifier := provider.Verifier(&oidc.Config{ClientID: clientID})
+
+	token, err := verifier.Verify(ctx, jwtStr)
+	if err != nil {
+		return nil, nil, fmt.Errorf("JWT validation failed: %w", err)
+	}
+
+	if alg == "none" {
+		return nil, nil, fmt.Errorf("invalid alg claim")
+	}
+
+	return claims, token, nil
+}
+
+func (h *Hub) mintBiscuitToken(claims jwt.MapClaims, token *oidc.IDToken, remotePeer peer.ID) ([]byte, error) {
+	var roles []string
+	if rolesAny, ok := claims["roles"].([]any); ok {
+		for _, r := range rolesAny {
+			if str, ok := r.(string); ok {
+				roles = append(roles, str)
+			}
+		}
+	}
+
+	builder := biscuit.NewBuilder(h.KeyRing.GetCurrentKey())
+
+	if err := builder.AddAuthorityFact(biscuit.Fact{Predicate: biscuit.Predicate{
+		Name: api.FactExpiration,
+		IDs:  []biscuit.Term{biscuit.Date(token.Expiry)},
+	}}); err != nil {
+		return nil, fmt.Errorf("failed to add expiration fact: %w", err)
+	}
+
+	if err := builder.AddAuthorityFact(biscuit.Fact{Predicate: biscuit.Predicate{
+		Name: api.FactNode,
+		IDs:  []biscuit.Term{biscuit.String(remotePeer.String())},
+	}}); err != nil {
+		return nil, fmt.Errorf("failed to add node fact: %w", err)
+	}
+
+	if err := builder.AddAuthorityFact(biscuit.Fact{Predicate: biscuit.Predicate{
+		Name: api.FactClientPeerID,
+		IDs:  []biscuit.Term{biscuit.String(remotePeer.String())},
+	}}); err != nil {
+		return nil, fmt.Errorf("failed to add client_peer_id fact: %w", err)
+	}
+
+	for _, role := range roles {
+		if err := builder.AddAuthorityFact(biscuit.Fact{Predicate: biscuit.Predicate{
+			Name: api.FactGroup,
+			IDs:  []biscuit.Term{biscuit.String(role)},
+		}}); err != nil {
+			return nil, fmt.Errorf("failed to add group fact: %w", err)
+		}
+
+		if h.Policy != nil {
+			if rolePolicy, ok := h.Policy.Roles[role]; ok {
+				for _, tool := range rolePolicy.MCP.AllowedTools {
+					if err := builder.AddAuthorityFact(biscuit.Fact{Predicate: biscuit.Predicate{
+						Name: api.FactMCPTool,
+						IDs:  []biscuit.Term{biscuit.String(tool)},
+					}}); err != nil {
+						logger.Errorw("Failed to add MCP tool fact to biscuit", "peer_id", remotePeer, "tool", tool, "error", err)
+					}
+				}
+				for _, target := range rolePolicy.Network.AllowedTargets {
+					if err := builder.AddAuthorityFact(biscuit.Fact{Predicate: biscuit.Predicate{
+						Name: api.FactNetworkTarget,
+						IDs:  []biscuit.Term{biscuit.String(target)},
+					}}); err != nil {
+						logger.Errorw("Failed to add network target fact to biscuit", "peer_id", remotePeer, "target", target, "error", err)
+					}
+				}
+				for _, customFact := range rolePolicy.CustomDatalog {
+					trimmed := strings.TrimRight(strings.TrimSpace(customFact), ";")
+					if trimmed == "" {
+						continue
+					}
+					func() {
+						defer func() {
+							if r := recover(); r != nil {
+								logger.Errorw("Panic parsing custom fact", "peer_id", remotePeer, "fact", trimmed, "recover", r)
+							}
+						}()
+						fact, err := parser.FromStringFact(trimmed)
+						if err != nil {
+							logger.Errorw("Failed to parse custom fact", "peer_id", remotePeer, "fact", trimmed, "error", err)
+							return
+						}
+						if err := builder.AddAuthorityFact(fact); err != nil {
+							logger.Errorw("Failed to add custom fact to biscuit", "peer_id", remotePeer, "fact", trimmed, "error", err)
+						}
+					}()
+				}
+			}
+		}
+	}
+
+	t, err := builder.Build()
+	if err != nil {
+		return nil, fmt.Errorf("failed to build biscuit: %w", err)
+	}
+
+	biscuitData, err := t.Serialize()
+	if err != nil {
+		return nil, fmt.Errorf("failed to serialize biscuit: %w", err)
+	}
+
+	return biscuitData, nil
 }
 
 // startWatchdog periodically checks for peers that have connected but not completed OIDC
@@ -651,20 +651,20 @@ func main() {
 
 	defIssuer := os.Getenv("SAM_OIDC_ISSUER")
 	if defIssuer == "" {
-		defIssuer = "https://accounts.google.com"
+		defIssuer = DefaultOIDCIssuer
 	}
 	rootCmd.Flags().StringVar(&oidcIssuer, "issuer", defIssuer, "OIDC Issuer URL")
 	rootCmd.Flags().StringVar(&clientID, "client-id", os.Getenv("SAM_OIDC_ID"), "OIDC Client ID")
 	rootCmd.Flags().StringVar(&biscuitHex, "key", os.Getenv("SAM_HUB_KEY"), "Hub Private Key (32-byte Hex)")
 	rootCmd.Flags().StringSliceVar(&listenAddrs, "listen", []string{"/ip4/0.0.0.0/udp/8080/quic-v1", "/ip4/0.0.0.0/tcp/8080"}, "libp2p Listen Addrs")
-	rootCmd.Flags().StringVar(&meshName, "mesh", "public-mesh", "Mesh federation name")
+	rootCmd.Flags().StringVar(&meshName, "mesh", DefaultMeshName, "Mesh federation name")
 	rootCmd.Flags().BoolVar(&insecureSkipTLSVerify, "insecure-skip-tls-verify", false, "Skip TLS verification for OIDC issuers")
 	rootCmd.Flags().StringVar(&logLevel, "log-level", "info", "Log level (debug, info, warn, error)")
-	rootCmd.Flags().StringVar(&policyFile, "policy-file", "policies.yaml", "Path to policies.yaml")
+	rootCmd.Flags().StringVar(&policyFile, "policy-file", DefaultPolicyFile, "Path to policies.yaml")
 	rootCmd.Flags().DurationVar(&keyRotationInterval, "key-rotation-interval", 0, "Key rotation interval (e.g. 12h). 0 disables rotation.")
 	rootCmd.Flags().DurationVar(&keyGracePeriod, "key-grace-period", 24*time.Hour, "Key grace period for old keys (e.g. 24h).")
-	rootCmd.Flags().StringVar(&keysDBPath, "keys-db", "keys.db", "Path to BoltDB file for keys")
-	rootCmd.PersistentFlags().StringVar(&bindAddress, "bind-address", ":9090", "Address to listen on for HTTP/HTTPS service")
+	rootCmd.Flags().StringVar(&keysDBPath, "keys-db", DefaultKeysDBPath, "Path to BoltDB file for keys")
+	rootCmd.PersistentFlags().StringVar(&bindAddress, "bind-address", DefaultBindAddress, "Address to listen on for HTTP/HTTPS service")
 	rootCmd.PersistentFlags().StringVar(&adminToken, "admin-token", "", "Secret token for authorizing admin requests")
 	rootCmd.PersistentFlags().StringVar(&tlsCertFile, "tls-cert-file", "", "Path to TLS certificate for the server")
 	rootCmd.PersistentFlags().StringVar(&tlsKeyFile, "tls-key-file", "", "Path to TLS private key for the server")
