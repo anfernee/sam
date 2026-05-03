@@ -143,7 +143,7 @@ func waitForAPI(t *testing.T, addr string) {
 
 func registerService(t *testing.T, apiAddr, token, serviceName string) {
 	t.Helper()
-	reqBody := map[string]string{"Type": "mcp", "Name": serviceName, "Description": "test desc"}
+	reqBody := map[string]any{"Type": api.ServiceType_SERVICE_TYPE_MCP, "Name": serviceName, "Description": "test desc"}
 	body, _ := json.Marshal(reqBody)
 	req, _ := http.NewRequest("POST", "http://"+apiAddr+"/sam/service/register", bytes.NewBuffer(body))
 	req.Header.Set("Authorization", "Bearer "+token)

@@ -20,6 +20,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"net/http"
 	"os"
 	"strings"
 	"sync"
@@ -32,6 +33,7 @@ import (
 	lru "github.com/hashicorp/golang-lru/v2"
 	"github.com/ipfs/go-cid"
 	"github.com/libp2p/go-libp2p"
+	gostream "github.com/libp2p/go-libp2p-gostream"
 	dht "github.com/libp2p/go-libp2p-kad-dht"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	"github.com/libp2p/go-libp2p/core/crypto"
@@ -85,6 +87,7 @@ type SamNode struct {
 	keysMu            sync.RWMutex
 	rateLimiter       *PeerRateLimiter
 	services          map[string]*api.ServiceInfo
+	serviceHandlers   map[string]http.Handler
 	servicesMu        sync.RWMutex
 	BoundHTTPAddr     string
 }
@@ -97,13 +100,14 @@ func NewSamNode(ctx context.Context, privKey crypto.PrivKey, hubPubKey ed25519.P
 	}
 
 	node := &SamNode{
-		Store:        store,
-		trustedKeys:  trustedKeys,
-		knownPeers:   make(map[string]bool),
-		receivedMsgs: make(map[string][]string),
-		topics:       make(map[string]*pubsub.Topic),
-		services:     make(map[string]*api.ServiceInfo),
-		LocalPolicy:  localPolicy,
+		Store:           store,
+		trustedKeys:     trustedKeys,
+		knownPeers:      make(map[string]bool),
+		receivedMsgs:    make(map[string][]string),
+		topics:          make(map[string]*pubsub.Topic),
+		services:        make(map[string]*api.ServiceInfo),
+		serviceHandlers: make(map[string]http.Handler),
+		LocalPolicy:     localPolicy,
 	}
 
 	var err error
@@ -234,6 +238,11 @@ func NewSamNode(ctx context.Context, privKey crypto.PrivKey, hubPubKey ed25519.P
 
 	// Start key pruning
 	node.startKeyPruning(ctx, keyGracePeriod)
+
+	// Start Ingress HTTP Server
+	if err := node.StartIngressServer(ctx); err != nil {
+		return nil, fmt.Errorf("failed to start ingress server: %w", err)
+	}
 
 	return node, nil
 }
@@ -609,8 +618,38 @@ func (n *SamNode) verifyBiscuit(biscuitData []byte, remotePeer peer.ID) (*biscui
 	return nil, fmt.Errorf("no valid key found")
 }
 
-func serviceNameToCID(serviceType, serviceName string) (cid.Cid, error) {
-	serviceKey := fmt.Sprintf("sam:service:%s:%s", serviceType, serviceName)
+func serviceTypeToString(t api.ServiceType) (string, error) {
+	switch t {
+	case api.ServiceType_SERVICE_TYPE_MCP:
+		return "mcp", nil
+	case api.ServiceType_SERVICE_TYPE_INFERENCE:
+		return "inference", nil
+	case api.ServiceType_SERVICE_TYPE_A2A:
+		return "a2a", nil
+	default:
+		return "", fmt.Errorf("invalid or unspecified service type")
+	}
+}
+
+func parseServiceType(s string) (api.ServiceType, error) {
+	switch strings.ToLower(s) {
+	case "mcp":
+		return api.ServiceType_SERVICE_TYPE_MCP, nil
+	case "inference":
+		return api.ServiceType_SERVICE_TYPE_INFERENCE, nil
+	case "a2a":
+		return api.ServiceType_SERVICE_TYPE_A2A, nil
+	default:
+		return api.ServiceType_SERVICE_TYPE_UNSPECIFIED, fmt.Errorf("invalid service type: %s", s)
+	}
+}
+
+func serviceNameToCID(serviceType api.ServiceType, serviceName string) (cid.Cid, error) {
+	typeStr, err := serviceTypeToString(serviceType)
+	if err != nil {
+		return cid.Undef, err
+	}
+	serviceKey := fmt.Sprintf("sam:service:%s:%s", typeStr, serviceName)
 	hash, err := multihash.Sum([]byte(serviceKey), multihash.SHA2_256, -1)
 	if err != nil {
 		return cid.Undef, err
@@ -619,6 +658,9 @@ func serviceNameToCID(serviceType, serviceName string) (cid.Cid, error) {
 }
 
 func (n *SamNode) RegisterService(ctx context.Context, info *api.ServiceInfo) error {
+	if info.Type == api.ServiceType_SERVICE_TYPE_UNSPECIFIED {
+		return fmt.Errorf("cannot register service with unspecified type")
+	}
 	c, err := serviceNameToCID(info.Type, info.Name)
 	if err != nil {
 		return err
@@ -657,7 +699,7 @@ func (n *SamNode) IsServiceRegistered(serviceName string) bool {
 	return ok
 }
 
-func (n *SamNode) FindProviders(ctx context.Context, serviceType, serviceName string) ([]peer.AddrInfo, error) {
+func (n *SamNode) FindProviders(ctx context.Context, serviceType api.ServiceType, serviceName string) ([]peer.AddrInfo, error) {
 	c, err := serviceNameToCID(serviceType, serviceName)
 	if err != nil {
 		return nil, err
@@ -675,8 +717,13 @@ func (n *SamNode) FindProviders(ctx context.Context, serviceType, serviceName st
 	return providerInfos, nil
 }
 
-func (n *SamNode) DiscoverRemoteServices(ctx context.Context, serviceType, serviceName string) ([]*api.DiscoveredProvider, error) {
+func (n *SamNode) DiscoverRemoteServices(ctx context.Context, serviceType api.ServiceType, serviceName string) ([]*api.DiscoveredProvider, error) {
 	providers, err := n.FindProviders(ctx, serviceType, serviceName)
+	if err != nil {
+		return nil, err
+	}
+
+	typeStr, err := serviceTypeToString(serviceType)
 	if err != nil {
 		return nil, err
 	}
@@ -688,12 +735,11 @@ func (n *SamNode) DiscoverRemoteServices(ctx context.Context, serviceType, servi
 		}
 
 		// Construct local proxy URL
-		// We need to know our own bound port. We'll assume it's set in node.BoundHTTPAddr
 		// Format: http://localhost:<sam_port>/sam/{peer_id}/{service_type}/{service_name}
 		localURL := fmt.Sprintf("http://%s/sam/%s/%s/%s", 
 			n.BoundHTTPAddr, 
 			p.ID.String(), 
-			serviceType, 
+			typeStr, 
 			serviceName,
 		)
 
@@ -715,4 +761,71 @@ func (n *SamNode) ListLocalServices() []*api.ServiceInfo {
 		services = append(services, info)
 	}
 	return services
+}
+
+func (n *SamNode) StartIngressServer(ctx context.Context) error {
+	listener, err := gostream.Listen(n.Host, "/libp2p-http")
+	if err != nil {
+		return err
+	}
+
+	server := &http.Server{
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			path := r.URL.Path
+			parts := strings.SplitN(strings.TrimPrefix(path, "/"), "/", 3)
+			if len(parts) < 2 {
+				http.Error(w, "Invalid path", http.StatusBadRequest)
+				return
+			}
+			serviceTypeStr := parts[0]
+			serviceName := parts[1]
+			upstreamPath := ""
+			if len(parts) > 2 {
+				upstreamPath = parts[2]
+			}
+
+			serviceType, err := parseServiceType(serviceTypeStr)
+			if err != nil || serviceType == api.ServiceType_SERVICE_TYPE_UNSPECIFIED {
+				http.Error(w, "Invalid service type", http.StatusBadRequest)
+				return
+			}
+
+			n.mu.Lock()
+			handler, ok := n.serviceHandlers[serviceName]
+			n.mu.Unlock()
+
+			if !ok {
+				http.Error(w, "Service not found", http.StatusNotFound)
+				return
+			}
+
+			r.URL.Path = "/" + upstreamPath
+			handler.ServeHTTP(w, r)
+		}),
+	}
+
+	go func() {
+		logger.Infof("[Ingress] Starting P2P HTTP server on protocol /libp2p-http")
+		if err := server.Serve(listener); err != nil && err != http.ErrServerClosed {
+			logger.Errorf("[Ingress] Server error: %v", err)
+		}
+	}()
+
+	go func() {
+		<-ctx.Done()
+		if err := server.Close(); err != nil {
+			logger.Errorf("[Ingress] Failed to close server: %v", err)
+		}
+		if err := listener.Close(); err != nil {
+			logger.Errorf("[Ingress] Failed to close listener: %v", err)
+		}
+	}()
+
+	return nil
+}
+
+func (n *SamNode) RegisterServiceHandler(name string, handler http.Handler) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.serviceHandlers[name] = handler
 }

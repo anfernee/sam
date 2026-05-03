@@ -35,6 +35,58 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+type ServiceType int32
+
+const (
+	ServiceType_SERVICE_TYPE_UNSPECIFIED ServiceType = 0
+	ServiceType_SERVICE_TYPE_MCP         ServiceType = 1
+	ServiceType_SERVICE_TYPE_INFERENCE   ServiceType = 2
+	ServiceType_SERVICE_TYPE_A2A         ServiceType = 3
+)
+
+// Enum value maps for ServiceType.
+var (
+	ServiceType_name = map[int32]string{
+		0: "SERVICE_TYPE_UNSPECIFIED",
+		1: "SERVICE_TYPE_MCP",
+		2: "SERVICE_TYPE_INFERENCE",
+		3: "SERVICE_TYPE_A2A",
+	}
+	ServiceType_value = map[string]int32{
+		"SERVICE_TYPE_UNSPECIFIED": 0,
+		"SERVICE_TYPE_MCP":         1,
+		"SERVICE_TYPE_INFERENCE":   2,
+		"SERVICE_TYPE_A2A":         3,
+	}
+)
+
+func (x ServiceType) Enum() *ServiceType {
+	p := new(ServiceType)
+	*p = x
+	return p
+}
+
+func (x ServiceType) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (ServiceType) Descriptor() protoreflect.EnumDescriptor {
+	return file_api_sam_proto_enumTypes[0].Descriptor()
+}
+
+func (ServiceType) Type() protoreflect.EnumType {
+	return &file_api_sam_proto_enumTypes[0]
+}
+
+func (x ServiceType) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use ServiceType.Descriptor instead.
+func (ServiceType) EnumDescriptor() ([]byte, []int) {
+	return file_api_sam_proto_rawDescGZIP(), []int{0}
+}
+
 type MeshEvent_Type int32
 
 const (
@@ -71,11 +123,11 @@ func (x MeshEvent_Type) String() string {
 }
 
 func (MeshEvent_Type) Descriptor() protoreflect.EnumDescriptor {
-	return file_api_sam_proto_enumTypes[0].Descriptor()
+	return file_api_sam_proto_enumTypes[1].Descriptor()
 }
 
 func (MeshEvent_Type) Type() protoreflect.EnumType {
-	return &file_api_sam_proto_enumTypes[0]
+	return &file_api_sam_proto_enumTypes[1]
 }
 
 func (x MeshEvent_Type) Number() protoreflect.EnumNumber {
@@ -397,7 +449,7 @@ func (x *EnrollResponse) GetKnownPeers() []string {
 
 type ServiceInfo struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Type          string                 `protobuf:"bytes,1,opt,name=type,proto3" json:"type,omitempty"`
+	Type          ServiceType            `protobuf:"varint,1,opt,name=type,proto3,enum=sam.v1.ServiceType" json:"type,omitempty"`
 	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
 	Description   string                 `protobuf:"bytes,3,opt,name=description,proto3" json:"description,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -434,11 +486,11 @@ func (*ServiceInfo) Descriptor() ([]byte, []int) {
 	return file_api_sam_proto_rawDescGZIP(), []int{5}
 }
 
-func (x *ServiceInfo) GetType() string {
+func (x *ServiceInfo) GetType() ServiceType {
 	if x != nil {
 		return x.Type
 	}
-	return ""
+	return ServiceType_SERVICE_TYPE_UNSPECIFIED
 }
 
 func (x *ServiceInfo) GetName() string {
@@ -541,14 +593,19 @@ const file_api_sam_proto_rawDesc = "" +
 	"expiration\x18\x05 \x01(\x03R\n" +
 	"expiration\x12\x1f\n" +
 	"\vknown_peers\x18\x06 \x03(\tR\n" +
-	"knownPeers\"W\n" +
-	"\vServiceInfo\x12\x12\n" +
-	"\x04type\x18\x01 \x01(\tR\x04type\x12\x12\n" +
+	"knownPeers\"l\n" +
+	"\vServiceInfo\x12'\n" +
+	"\x04type\x18\x01 \x01(\x0e2\x13.sam.v1.ServiceTypeR\x04type\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12 \n" +
 	"\vdescription\x18\x03 \x01(\tR\vdescription\"U\n" +
 	"\x12DiscoveredProvider\x12\x17\n" +
 	"\apeer_id\x18\x01 \x01(\tR\x06peerId\x12&\n" +
-	"\x0flocal_proxy_url\x18\x02 \x01(\tR\rlocalProxyUrlB\x1bZ\x19github.com/google/sam/apib\x06proto3"
+	"\x0flocal_proxy_url\x18\x02 \x01(\tR\rlocalProxyUrl*s\n" +
+	"\vServiceType\x12\x1c\n" +
+	"\x18SERVICE_TYPE_UNSPECIFIED\x10\x00\x12\x14\n" +
+	"\x10SERVICE_TYPE_MCP\x10\x01\x12\x1a\n" +
+	"\x16SERVICE_TYPE_INFERENCE\x10\x02\x12\x14\n" +
+	"\x10SERVICE_TYPE_A2A\x10\x03B\x1bZ\x19github.com/google/sam/apib\x06proto3"
 
 var (
 	file_api_sam_proto_rawDescOnce sync.Once
@@ -562,25 +619,27 @@ func file_api_sam_proto_rawDescGZIP() []byte {
 	return file_api_sam_proto_rawDescData
 }
 
-var file_api_sam_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
+var file_api_sam_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
 var file_api_sam_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
 var file_api_sam_proto_goTypes = []any{
-	(MeshEvent_Type)(0),        // 0: sam.v1.MeshEvent.Type
-	(*AuthFrame)(nil),          // 1: sam.v1.AuthFrame
-	(*AuthResponse)(nil),       // 2: sam.v1.AuthResponse
-	(*MeshEvent)(nil),          // 3: sam.v1.MeshEvent
-	(*EnrollRequest)(nil),      // 4: sam.v1.EnrollRequest
-	(*EnrollResponse)(nil),     // 5: sam.v1.EnrollResponse
-	(*ServiceInfo)(nil),        // 6: sam.v1.ServiceInfo
-	(*DiscoveredProvider)(nil), // 7: sam.v1.DiscoveredProvider
+	(ServiceType)(0),           // 0: sam.v1.ServiceType
+	(MeshEvent_Type)(0),        // 1: sam.v1.MeshEvent.Type
+	(*AuthFrame)(nil),          // 2: sam.v1.AuthFrame
+	(*AuthResponse)(nil),       // 3: sam.v1.AuthResponse
+	(*MeshEvent)(nil),          // 4: sam.v1.MeshEvent
+	(*EnrollRequest)(nil),      // 5: sam.v1.EnrollRequest
+	(*EnrollResponse)(nil),     // 6: sam.v1.EnrollResponse
+	(*ServiceInfo)(nil),        // 7: sam.v1.ServiceInfo
+	(*DiscoveredProvider)(nil), // 8: sam.v1.DiscoveredProvider
 }
 var file_api_sam_proto_depIdxs = []int32{
-	0, // 0: sam.v1.MeshEvent.type:type_name -> sam.v1.MeshEvent.Type
-	1, // [1:1] is the sub-list for method output_type
-	1, // [1:1] is the sub-list for method input_type
-	1, // [1:1] is the sub-list for extension type_name
-	1, // [1:1] is the sub-list for extension extendee
-	0, // [0:1] is the sub-list for field type_name
+	1, // 0: sam.v1.MeshEvent.type:type_name -> sam.v1.MeshEvent.Type
+	0, // 1: sam.v1.ServiceInfo.type:type_name -> sam.v1.ServiceType
+	2, // [2:2] is the sub-list for method output_type
+	2, // [2:2] is the sub-list for method input_type
+	2, // [2:2] is the sub-list for extension type_name
+	2, // [2:2] is the sub-list for extension extendee
+	0, // [0:2] is the sub-list for field type_name
 }
 
 func init() { file_api_sam_proto_init() }
@@ -593,7 +652,7 @@ func file_api_sam_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_api_sam_proto_rawDesc), len(file_api_sam_proto_rawDesc)),
-			NumEnums:      1,
+			NumEnums:      2,
 			NumMessages:   7,
 			NumExtensions: 0,
 			NumServices:   0,

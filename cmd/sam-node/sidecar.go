@@ -21,10 +21,12 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/http/httputil"
 	"os"
 	"strings"
 
 	"github.com/google/sam/api"
+	libp2phttp "github.com/libp2p/go-libp2p-http"
 )
 
 func startSidecarServer(node *SamNode, addr, token, certFile, keyFile, caFile string) {
@@ -44,6 +46,9 @@ func startSidecarServer(node *SamNode, addr, token, certFile, keyFile, caFile st
 	mux.Handle("/sam/service/discover", withAuth(token, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		handleDiscoverService(node, w, r)
 	})))
+
+	// Mount Egress Proxy
+	mux.Handle("/sam/", withAuth(token, createEgressProxy(node)))
 
 	// Mount MCP handler
 	mcpHandler := NewMCPHandler(node)
@@ -169,7 +174,7 @@ func handleRegisterService(node *SamNode, w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	if req.Name == "" || req.Type == "" {
+	if req.Name == "" || req.Type == api.ServiceType_SERVICE_TYPE_UNSPECIFIED {
 		http.Error(w, "name and type are required", http.StatusBadRequest)
 		return
 	}
@@ -220,9 +225,15 @@ func handleDiscoverService(node *SamNode, w http.ResponseWriter, r *http.Request
 	}
 
 	serviceName := r.URL.Query().Get("name")
-	serviceType := r.URL.Query().Get("type")
-	if serviceName == "" || serviceType == "" {
+	serviceTypeStr := r.URL.Query().Get("type")
+	if serviceName == "" || serviceTypeStr == "" {
 		http.Error(w, "name and type query parameters are required", http.StatusBadRequest)
+		return
+	}
+
+	serviceType, err := parseServiceType(serviceTypeStr)
+	if err != nil || serviceType == api.ServiceType_SERVICE_TYPE_UNSPECIFIED {
+		http.Error(w, "Invalid or unspecified service type", http.StatusBadRequest)
 		return
 	}
 
@@ -236,4 +247,33 @@ func handleDiscoverService(node *SamNode, w http.ResponseWriter, r *http.Request
 	if err := json.NewEncoder(w).Encode(providers); err != nil {
 		logger.Errorf("Failed to encode providers: %v", err)
 	}
+}
+
+func createEgressProxy(node *SamNode) http.Handler {
+	transport := libp2phttp.NewTransport(node.Host)
+
+	proxy := &httputil.ReverseProxy{
+		Director: func(req *http.Request) {
+			parts := strings.SplitN(req.URL.Path, "/", 6)
+			if len(parts) < 5 {
+				return
+			}
+			peerID := parts[2]
+			serviceType := parts[3]
+			serviceName := parts[4]
+			upstreamPath := ""
+			if len(parts) > 5 {
+				upstreamPath = parts[5]
+			}
+
+			req.URL.Scheme = "libp2p"
+			req.URL.Host = peerID
+			req.Host = peerID
+			req.URL.Path = fmt.Sprintf("/%s/%s/%s", serviceType, serviceName, upstreamPath)
+			logger.Infof("[Proxy] Rewriting URL to libp2p://%s%s", req.URL.Host, req.URL.Path)
+		},
+		Transport: transport,
+	}
+
+	return proxy
 }

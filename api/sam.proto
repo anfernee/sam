@@ -57,8 +57,15 @@ message EnrollResponse {
   repeated string known_peers = 6;
 }
 
+enum ServiceType {
+  SERVICE_TYPE_UNSPECIFIED = 0;
+  SERVICE_TYPE_MCP = 1;
+  SERVICE_TYPE_INFERENCE = 2;
+  SERVICE_TYPE_A2A = 3;
+}
+
 message ServiceInfo {
-  string type = 1;
+  ServiceType type = 1;
   string name = 2;
   string description = 3;
 }

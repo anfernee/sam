@@ -85,7 +85,11 @@ func NewMCPHandler(node *SamNode) http.Handler {
 		Type string `json:"type" jsonschema:"Service type (mcp, inference, a2a)"`
 		Name string `json:"name" jsonschema:"Service name"`
 	}) (*mcp.CallToolResult, any, error) {
-		providers, err := node.DiscoverRemoteServices(ctx, params.Type, params.Name)
+		serviceType, err := parseServiceType(params.Type)
+		if err != nil || serviceType == api.ServiceType_SERVICE_TYPE_UNSPECIFIED {
+			return nil, nil, fmt.Errorf("invalid or unspecified service type: %s", params.Type)
+		}
+		providers, err := node.DiscoverRemoteServices(ctx, serviceType, params.Name)
 		if err != nil {
 			return nil, nil, err
 		}

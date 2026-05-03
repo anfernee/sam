@@ -147,7 +147,7 @@ func TestHandleRegisterService(t *testing.T) {
 		DHT:      d,
 	}
 
-	reqBody := &api.ServiceInfo{Type: "mcp", Name: "test-service", Description: "test desc"}
+	reqBody := &api.ServiceInfo{Type: api.ServiceType_SERVICE_TYPE_MCP, Name: "test-service", Description: "test desc"}
 	body, err := json.Marshal(reqBody)
 	if err != nil {
 		t.Fatalf("Failed to marshal request body: %v", err)
@@ -229,7 +229,7 @@ func TestHandleDiscoverService(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	serviceInfo := &api.ServiceInfo{Type: "mcp", Name: "remote-service"}
+	serviceInfo := &api.ServiceInfo{Type: api.ServiceType_SERVICE_TYPE_MCP, Name: "remote-service"}
 	c, err := serviceNameToCID(serviceInfo.Type, serviceInfo.Name)
 	if err != nil {
 		t.Fatal(err)
@@ -268,8 +268,8 @@ func TestListLocalServices(t *testing.T) {
 		services: make(map[string]*api.ServiceInfo),
 	}
 	
-	service1 := &api.ServiceInfo{Type: "mcp", Name: "service1"}
-	service2 := &api.ServiceInfo{Type: "inference", Name: "service2"}
+	service1 := &api.ServiceInfo{Type: api.ServiceType_SERVICE_TYPE_MCP, Name: "service1"}
+	service2 := &api.ServiceInfo{Type: api.ServiceType_SERVICE_TYPE_INFERENCE, Name: "service2"}
 	
 	node.services["service1"] = service1
 	node.services["service2"] = service2
