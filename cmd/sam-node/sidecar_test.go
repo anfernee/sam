@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"google.golang.org/protobuf/encoding/protojson"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -143,12 +144,15 @@ func TestHandleRegisterService(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	node := &SamNode{
-		services: make(map[string]*api.ServiceInfo),
+		services: make(map[string]*ServiceManifest),
 		DHT:      d,
 	}
 
-	reqBody := &api.ServiceInfo{Type: api.ServiceType_SERVICE_TYPE_MCP, Name: "test-service", Description: "test desc"}
-	body, err := json.Marshal(reqBody)
+	reqBody := &api.RegisterServiceRequest{
+		Service: &api.ServiceInfo{Type: api.ServiceType_SERVICE_TYPE_MCP, Name: "test-service", Description: "test desc"},
+		Backend: &api.RegisterServiceRequest_TargetUrl{TargetUrl: "http://localhost:8080"},
+	}
+	body, err := protojson.Marshal(reqBody)
 	if err != nil {
 		t.Fatalf("Failed to marshal request body: %v", err)
 	}
@@ -169,9 +173,9 @@ func TestHandleRegisterService(t *testing.T) {
 
 func TestHandleUnregisterService(t *testing.T) {
 	node := &SamNode{
-		services: make(map[string]*api.ServiceInfo),
+		services: make(map[string]*ServiceManifest),
 	}
-	node.services["test-service"] = &api.ServiceInfo{Name: "test-service"}
+	node.services["test-service"] = &ServiceManifest{Info: &api.ServiceInfo{Name: "test-service"}}
 
 	reqBody := &api.ServiceInfo{Name: "test-service"}
 	body, err := json.Marshal(reqBody)
@@ -206,7 +210,7 @@ func TestHandleDiscoverService(t *testing.T) {
 	defer func() { _ = d.Close() }()
 
 	node := &SamNode{
-		services: make(map[string]*api.ServiceInfo),
+		services: make(map[string]*ServiceManifest),
 		DHT:      d,
 		Host:     h,
 		BoundHTTPAddr: "127.0.0.1:8080",
@@ -265,18 +269,78 @@ func TestHandleDiscoverService(t *testing.T) {
 
 func TestListLocalServices(t *testing.T) {
 	node := &SamNode{
-		services: make(map[string]*api.ServiceInfo),
+		services: make(map[string]*ServiceManifest),
 	}
 	
 	service1 := &api.ServiceInfo{Type: api.ServiceType_SERVICE_TYPE_MCP, Name: "service1"}
 	service2 := &api.ServiceInfo{Type: api.ServiceType_SERVICE_TYPE_INFERENCE, Name: "service2"}
 	
-	node.services["service1"] = service1
-	node.services["service2"] = service2
+	node.services["service1"] = &ServiceManifest{Info: service1}
+	node.services["service2"] = &ServiceManifest{Info: service2}
 
 	services := node.ListLocalServices()
 
 	if len(services) != 2 {
 		t.Errorf("expected 2 services, got %d", len(services))
+	}
+}
+
+func TestHandleRegisterService_Validation(t *testing.T) {
+	node := &SamNode{
+		services: make(map[string]*ServiceManifest),
+	}
+
+	tests := []struct {
+		name           string
+		reqBody        *api.RegisterServiceRequest
+		expectedStatus int
+	}{
+		{
+			name: "Missing service",
+			reqBody: &api.RegisterServiceRequest{
+				Backend: &api.RegisterServiceRequest_TargetUrl{TargetUrl: "http://localhost:8080"},
+			},
+			expectedStatus: http.StatusBadRequest,
+		},
+		{
+			name: "Missing name",
+			reqBody: &api.RegisterServiceRequest{
+				Service: &api.ServiceInfo{Type: api.ServiceType_SERVICE_TYPE_MCP},
+				Backend: &api.RegisterServiceRequest_TargetUrl{TargetUrl: "http://localhost:8080"},
+			},
+			expectedStatus: http.StatusBadRequest,
+		},
+		{
+			name: "Unspecified type",
+			reqBody: &api.RegisterServiceRequest{
+				Service: &api.ServiceInfo{Name: "test-service", Type: api.ServiceType_SERVICE_TYPE_UNSPECIFIED},
+				Backend: &api.RegisterServiceRequest_TargetUrl{TargetUrl: "http://localhost:8080"},
+			},
+			expectedStatus: http.StatusBadRequest,
+		},
+		{
+			name: "Missing backend",
+			reqBody: &api.RegisterServiceRequest{
+				Service: &api.ServiceInfo{Name: "test-service", Type: api.ServiceType_SERVICE_TYPE_MCP},
+			},
+			expectedStatus: http.StatusBadRequest,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body, err := protojson.Marshal(tt.reqBody)
+			if err != nil {
+				t.Fatal(err)
+			}
+			req := httptest.NewRequest("POST", "/sam/service/register", bytes.NewBuffer(body))
+			rr := httptest.NewRecorder()
+
+			handleRegisterService(node, rr, req)
+
+			if rr.Code != tt.expectedStatus {
+				t.Errorf("expected status %d, got %d, body: %s", tt.expectedStatus, rr.Code, rr.Body.String())
+			}
+		})
 	}
 }

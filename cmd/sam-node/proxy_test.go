@@ -6,6 +6,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
 	"testing"
 	"time"
 
@@ -95,17 +97,21 @@ func TestDatapathIntegration(t *testing.T) {
 		Name: serviceName,
 	}
 	
-	// We need to make sure the node knows how to handle this service locally.
-	// We use the dummy server as the handler.
-	nodeA.RegisterServiceHandler(serviceName, dummyServer.Config.Handler)
-	
-	// We also register it in the DHT so Node B can find it if needed (though we use direct URL in test)
+	// We register it in the DHT and also setup the local handler.
 	// We ignore the error because DHT Provide might fail if routing table is empty in this isolated test.
-	_ = nodeA.RegisterService(ctx, serviceInfo)
-	
+	_ = nodeA.RegisterService(ctx, &api.RegisterServiceRequest{
+		Service: serviceInfo,
+		Backend: &api.RegisterServiceRequest_TargetUrl{TargetUrl: dummyServer.URL},
+	})
+
 	// Manually add to services map to ensure it's registered for the test lookup
+	// because RegisterService might have failed due to DHT not being ready in this isolated test.
+	targetURL, _ := url.Parse(dummyServer.URL)
 	nodeA.servicesMu.Lock()
-	nodeA.services[serviceName] = serviceInfo
+	nodeA.services[serviceName] = &ServiceManifest{
+		Info:    serviceInfo,
+		Handler: httputil.NewSingleHostReverseProxy(targetURL),
+	}
 	nodeA.servicesMu.Unlock()
 
 	// Start the Sidecar server for Node B to get BoundHTTPAddr populated

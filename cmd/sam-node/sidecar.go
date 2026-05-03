@@ -19,7 +19,9 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
+	"google.golang.org/protobuf/encoding/protojson"
 	"net/http"
 	"net/http/httputil"
 	"os"
@@ -168,14 +170,31 @@ func handleRegisterService(node *SamNode, w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	var req api.ServiceInfo
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "Failed to read request body", http.StatusInternalServerError)
+		return
+	}
+	_ = r.Body.Close()
+
+	var req api.RegisterServiceRequest
+	if err := protojson.Unmarshal(body, &req); err != nil {
+		http.Error(w, fmt.Sprintf("Invalid request body: %v", err), http.StatusBadRequest)
 		return
 	}
 
-	if req.Name == "" || req.Type == api.ServiceType_SERVICE_TYPE_UNSPECIFIED {
+	if req.Service == nil {
+		http.Error(w, "service field is required", http.StatusBadRequest)
+		return
+	}
+
+	if req.Service.Name == "" || req.Service.Type == api.ServiceType_SERVICE_TYPE_UNSPECIFIED {
 		http.Error(w, "name and type are required", http.StatusBadRequest)
+		return
+	}
+
+	if req.Backend == nil {
+		http.Error(w, "backend is required", http.StatusBadRequest)
 		return
 	}
 

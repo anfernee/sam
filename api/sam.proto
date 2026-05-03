@@ -70,6 +70,19 @@ message ServiceInfo {
   string description = 3;
 }
 
+message CommandBackend {
+  repeated string command = 1;
+  map<string, string> env = 2;
+}
+
+message RegisterServiceRequest {
+  ServiceInfo service = 1;
+  oneof backend {
+    string target_url = 2;
+    CommandBackend command = 3;
+  }
+}
+
 message DiscoveredProvider {
   string peer_id = 1;
   string local_proxy_url = 2; 

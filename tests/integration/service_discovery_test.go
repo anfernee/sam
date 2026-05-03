@@ -17,6 +17,7 @@ package integration_test
 import (
 	"bytes"
 	"encoding/json"
+	"google.golang.org/protobuf/encoding/protojson"
 	"io"
 	"net/http"
 	"path/filepath"
@@ -143,8 +144,18 @@ func waitForAPI(t *testing.T, addr string) {
 
 func registerService(t *testing.T, apiAddr, token, serviceName string) {
 	t.Helper()
-	reqBody := map[string]any{"Type": api.ServiceType_SERVICE_TYPE_MCP, "Name": serviceName, "Description": "test desc"}
-	body, _ := json.Marshal(reqBody)
+	reqData := &api.RegisterServiceRequest{
+		Service: &api.ServiceInfo{
+			Type:        api.ServiceType_SERVICE_TYPE_MCP,
+			Name:        serviceName,
+			Description: "test desc",
+		},
+		Backend: &api.RegisterServiceRequest_TargetUrl{TargetUrl: "http://localhost:8080"},
+	}
+	body, err := protojson.Marshal(reqData)
+	if err != nil {
+		t.Fatal(err)
+	}
 	req, _ := http.NewRequest("POST", "http://"+apiAddr+"/sam/service/register", bytes.NewBuffer(body))
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
