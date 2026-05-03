@@ -215,7 +215,7 @@ EOF"
     --token-url "http://mock-oidc:18080/token" \
     --listen "/ip4/0.0.0.0/udp/5001/quic-v1" \
     --listen "/ip4/0.0.0.0/tcp/5002" \
-    --mcp-addr "0.0.0.0:8080" \
+    --bind-addr "0.0.0.0:8080" \
     --mesh "e2e-mesh" \
     --local-policy "/etc/sam/local_policy.yaml" >/dev/null
 

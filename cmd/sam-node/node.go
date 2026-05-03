@@ -46,6 +46,8 @@ import (
 	"github.com/libp2p/go-msgio"
 	"github.com/multiformats/go-multiaddr"
 	"google.golang.org/protobuf/proto"
+	"github.com/ipfs/go-cid"
+	"github.com/multiformats/go-multihash"
 )
 
 const (
@@ -82,6 +84,8 @@ type SamNode struct {
 	trustedKeys       []TrustedKey
 	keysMu            sync.RWMutex
 	rateLimiter       *PeerRateLimiter
+	services          map[string]bool
+	servicesMu        sync.RWMutex
 }
 
 // NewSamNode creates a new Agent instance secured with the 4-layer pipeline.
@@ -97,6 +101,7 @@ func NewSamNode(ctx context.Context, privKey crypto.PrivKey, hubPubKey ed25519.P
 		knownPeers:   make(map[string]bool),
 		receivedMsgs: make(map[string][]string),
 		topics:       make(map[string]*pubsub.Topic),
+		services:     make(map[string]bool),
 		LocalPolicy:  localPolicy,
 	}
 
@@ -161,7 +166,7 @@ func NewSamNode(ctx context.Context, privKey crypto.PrivKey, hubPubKey ed25519.P
 	node.Host = h
 
 	// Initialize Rendezvous (DHT Client)
-	kdht, err := dht.New(ctx, h, dht.Mode(dht.ModeAuto))
+	kdht, err := dht.New(ctx, h, dht.Mode(dht.ModeAuto), dht.ProtocolPrefix("/sam"))
 	if err != nil {
 		return nil, err
 	}
@@ -601,4 +606,62 @@ func (n *SamNode) verifyBiscuit(biscuitData []byte, remotePeer peer.ID) (*biscui
 	}
 
 	return nil, fmt.Errorf("no valid key found")
+}
+
+func serviceNameToCID(name string) (cid.Cid, error) {
+	pref := cid.Prefix{
+		Version:  1,
+		Codec:    cid.Raw,
+		MhType:   multihash.SHA2_256,
+		MhLength: -1, // default length
+	}
+	return pref.Sum([]byte(name))
+}
+
+func (n *SamNode) RegisterService(ctx context.Context, serviceName string) error {
+	n.servicesMu.Lock()
+	n.services[serviceName] = true
+	n.servicesMu.Unlock()
+
+	// Announce to DHT
+	c, err := serviceNameToCID(serviceName)
+	if err != nil {
+		return err
+	}
+
+	logger.Infof("[ServiceRegistry] Registering service %s (CID: %s)", serviceName, c)
+	if n.DHT != nil {
+		return n.DHT.Provide(ctx, c, true)
+	}
+	return nil
+}
+
+func (n *SamNode) UnregisterService(ctx context.Context, serviceName string) error {
+	n.servicesMu.Lock()
+	delete(n.services, serviceName)
+	n.servicesMu.Unlock()
+
+	logger.Infof("[ServiceRegistry] Unregistered service %s", serviceName)
+	// We can't easily remove provider records from DHT, but we stop providing it.
+	return nil
+}
+
+func (n *SamNode) IsServiceRegistered(serviceName string) bool {
+	n.servicesMu.RLock()
+	defer n.servicesMu.RUnlock()
+	return n.services[serviceName]
+}
+
+func (n *SamNode) FindProviders(ctx context.Context, serviceName string) ([]peer.AddrInfo, error) {
+	c, err := serviceNameToCID(serviceName)
+	if err != nil {
+		return nil, err
+	}
+
+	providers := n.DHT.FindProvidersAsync(ctx, c, 20)
+	var providerInfos []peer.AddrInfo
+	for p := range providers {
+		providerInfos = append(providerInfos, p)
+	}
+	return providerInfos, nil
 }
