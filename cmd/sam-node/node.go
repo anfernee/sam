@@ -84,8 +84,9 @@ type SamNode struct {
 	trustedKeys       []TrustedKey
 	keysMu            sync.RWMutex
 	rateLimiter       *PeerRateLimiter
-	services          map[string]bool
+	services          map[string]*api.ServiceInfo
 	servicesMu        sync.RWMutex
+	BoundHTTPAddr     string
 }
 
 // NewSamNode creates a new Agent instance secured with the 4-layer pipeline.
@@ -101,7 +102,7 @@ func NewSamNode(ctx context.Context, privKey crypto.PrivKey, hubPubKey ed25519.P
 		knownPeers:   make(map[string]bool),
 		receivedMsgs: make(map[string][]string),
 		topics:       make(map[string]*pubsub.Topic),
-		services:     make(map[string]bool),
+		services:     make(map[string]*api.ServiceInfo),
 		LocalPolicy:  localPolicy,
 	}
 
@@ -608,18 +609,17 @@ func (n *SamNode) verifyBiscuit(biscuitData []byte, remotePeer peer.ID) (*biscui
 	return nil, fmt.Errorf("no valid key found")
 }
 
-func serviceNameToCID(name string) (cid.Cid, error) {
-	pref := cid.Prefix{
-		Version:  1,
-		Codec:    cid.Raw,
-		MhType:   multihash.SHA2_256,
-		MhLength: -1, // default length
+func serviceNameToCID(serviceType, serviceName string) (cid.Cid, error) {
+	serviceKey := fmt.Sprintf("sam:service:%s:%s", serviceType, serviceName)
+	hash, err := multihash.Sum([]byte(serviceKey), multihash.SHA2_256, -1)
+	if err != nil {
+		return cid.Undef, err
 	}
-	return pref.Sum([]byte(name))
+	return cid.NewCidV1(cid.Raw, hash), nil
 }
 
-func (n *SamNode) RegisterService(ctx context.Context, serviceName string) error {
-	c, err := serviceNameToCID(serviceName)
+func (n *SamNode) RegisterService(ctx context.Context, info *api.ServiceInfo) error {
+	c, err := serviceNameToCID(info.Type, info.Name)
 	if err != nil {
 		return err
 	}
@@ -633,10 +633,10 @@ func (n *SamNode) RegisterService(ctx context.Context, serviceName string) error
 	}
 
 	n.servicesMu.Lock()
-	n.services[serviceName] = true
+	n.services[info.Name] = info
 	n.servicesMu.Unlock()
 
-	logger.Infof("[ServiceRegistry] Registering service %s (CID: %s)", serviceName, c)
+	logger.Infof("[ServiceRegistry] Registering service %s/%s (CID: %s)", info.Type, info.Name, c)
 	return nil
 }
 
@@ -653,11 +653,12 @@ func (n *SamNode) UnregisterService(ctx context.Context, serviceName string) err
 func (n *SamNode) IsServiceRegistered(serviceName string) bool {
 	n.servicesMu.RLock()
 	defer n.servicesMu.RUnlock()
-	return n.services[serviceName]
+	_, ok := n.services[serviceName]
+	return ok
 }
 
-func (n *SamNode) FindProviders(ctx context.Context, serviceName string) ([]peer.AddrInfo, error) {
-	c, err := serviceNameToCID(serviceName)
+func (n *SamNode) FindProviders(ctx context.Context, serviceType, serviceName string) ([]peer.AddrInfo, error) {
+	c, err := serviceNameToCID(serviceType, serviceName)
 	if err != nil {
 		return nil, err
 	}
@@ -672,4 +673,46 @@ func (n *SamNode) FindProviders(ctx context.Context, serviceName string) ([]peer
 		providerInfos = append(providerInfos, p)
 	}
 	return providerInfos, nil
+}
+
+func (n *SamNode) DiscoverRemoteServices(ctx context.Context, serviceType, serviceName string) ([]*api.DiscoveredProvider, error) {
+	providers, err := n.FindProviders(ctx, serviceType, serviceName)
+	if err != nil {
+		return nil, err
+	}
+
+	var discovered []*api.DiscoveredProvider
+	for _, p := range providers {
+		if p.ID == n.Host.ID() {
+			continue
+		}
+
+		// Construct local proxy URL
+		// We need to know our own bound port. We'll assume it's set in node.BoundHTTPAddr
+		// Format: http://localhost:<sam_port>/sam/{peer_id}/{service_type}/{service_name}
+		localURL := fmt.Sprintf("http://%s/sam/%s/%s/%s", 
+			n.BoundHTTPAddr, 
+			p.ID.String(), 
+			serviceType, 
+			serviceName,
+		)
+
+		discovered = append(discovered, &api.DiscoveredProvider{
+			PeerId:        p.ID.String(),
+			LocalProxyUrl: localURL,
+		})
+	}
+
+	return discovered, nil
+}
+
+func (n *SamNode) ListLocalServices() []*api.ServiceInfo {
+	n.servicesMu.RLock()
+	defer n.servicesMu.RUnlock()
+
+	var services []*api.ServiceInfo
+	for _, info := range n.services {
+		services = append(services, info)
+	}
+	return services
 }

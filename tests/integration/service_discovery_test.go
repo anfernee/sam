@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/sam/api"
 	"github.com/libp2p/go-libp2p/core/peer"
 )
 
@@ -142,7 +143,7 @@ func waitForAPI(t *testing.T, addr string) {
 
 func registerService(t *testing.T, apiAddr, token, serviceName string) {
 	t.Helper()
-	reqBody := map[string]string{"service_name": serviceName}
+	reqBody := map[string]string{"Type": "mcp", "Name": serviceName, "Description": "test desc"}
 	body, _ := json.Marshal(reqBody)
 	req, _ := http.NewRequest("POST", "http://"+apiAddr+"/sam/service/register", bytes.NewBuffer(body))
 	req.Header.Set("Authorization", "Bearer "+token)
@@ -161,7 +162,7 @@ func registerService(t *testing.T, apiAddr, token, serviceName string) {
 
 func unregisterService(t *testing.T, apiAddr, token, serviceName string) {
 	t.Helper()
-	reqBody := map[string]string{"service_name": serviceName}
+	reqBody := map[string]string{"Name": serviceName}
 	body, _ := json.Marshal(reqBody)
 	req, _ := http.NewRequest("POST", "http://"+apiAddr+"/sam/service/unregister", bytes.NewBuffer(body))
 	req.Header.Set("Authorization", "Bearer "+token)
@@ -179,7 +180,7 @@ func unregisterService(t *testing.T, apiAddr, token, serviceName string) {
 
 func discoverService(t *testing.T, apiAddr, token, serviceName string) []peer.AddrInfo {
 	t.Helper()
-	req, _ := http.NewRequest("GET", "http://"+apiAddr+"/sam/service/discover?name="+serviceName, nil)
+	req, _ := http.NewRequest("GET", "http://"+apiAddr+"/sam/service/discover?type=mcp&name="+serviceName, nil)
 	req.Header.Set("Authorization", "Bearer "+token)
 
 	resp, err := http.DefaultClient.Do(req)
@@ -191,11 +192,22 @@ func discoverService(t *testing.T, apiAddr, token, serviceName string) []peer.Ad
 		t.Fatalf("Discover service failed with status: %d", resp.StatusCode)
 	}
 
-	var providers []peer.AddrInfo
+	var providers []api.DiscoveredProvider
 	if err := json.NewDecoder(resp.Body).Decode(&providers); err != nil {
 		t.Fatalf("Failed to decode providers: %v", err)
 	}
-	return providers
+
+	var addrInfos []peer.AddrInfo
+	for i := range providers {
+		p := &providers[i]
+		pid, err := peer.Decode(p.PeerId)
+		if err != nil {
+			t.Logf("Failed to decode peer ID %s: %v", p.PeerId, err)
+			continue
+		}
+		addrInfos = append(addrInfos, peer.AddrInfo{ID: pid})
+	}
+	return addrInfos
 }
 
 func getPeerIDFromAddr(addr string) peer.ID {

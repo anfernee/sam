@@ -56,3 +56,14 @@ message EnrollResponse {
   int64 expiration = 5;
   repeated string known_peers = 6;
 }
+
+message ServiceInfo {
+  string type = 1;
+  string name = 2;
+  string description = 3;
+}
+
+message DiscoveredProvider {
+  string peer_id = 1;
+  string local_proxy_url = 2; 
+}

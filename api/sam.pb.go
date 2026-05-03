@@ -395,6 +395,118 @@ func (x *EnrollResponse) GetKnownPeers() []string {
 	return nil
 }
 
+type ServiceInfo struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Type          string                 `protobuf:"bytes,1,opt,name=type,proto3" json:"type,omitempty"`
+	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	Description   string                 `protobuf:"bytes,3,opt,name=description,proto3" json:"description,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ServiceInfo) Reset() {
+	*x = ServiceInfo{}
+	mi := &file_api_sam_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ServiceInfo) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ServiceInfo) ProtoMessage() {}
+
+func (x *ServiceInfo) ProtoReflect() protoreflect.Message {
+	mi := &file_api_sam_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ServiceInfo.ProtoReflect.Descriptor instead.
+func (*ServiceInfo) Descriptor() ([]byte, []int) {
+	return file_api_sam_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *ServiceInfo) GetType() string {
+	if x != nil {
+		return x.Type
+	}
+	return ""
+}
+
+func (x *ServiceInfo) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *ServiceInfo) GetDescription() string {
+	if x != nil {
+		return x.Description
+	}
+	return ""
+}
+
+type DiscoveredProvider struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	PeerId        string                 `protobuf:"bytes,1,opt,name=peer_id,json=peerId,proto3" json:"peer_id,omitempty"`
+	LocalProxyUrl string                 `protobuf:"bytes,2,opt,name=local_proxy_url,json=localProxyUrl,proto3" json:"local_proxy_url,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DiscoveredProvider) Reset() {
+	*x = DiscoveredProvider{}
+	mi := &file_api_sam_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DiscoveredProvider) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DiscoveredProvider) ProtoMessage() {}
+
+func (x *DiscoveredProvider) ProtoReflect() protoreflect.Message {
+	mi := &file_api_sam_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DiscoveredProvider.ProtoReflect.Descriptor instead.
+func (*DiscoveredProvider) Descriptor() ([]byte, []int) {
+	return file_api_sam_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *DiscoveredProvider) GetPeerId() string {
+	if x != nil {
+		return x.PeerId
+	}
+	return ""
+}
+
+func (x *DiscoveredProvider) GetLocalProxyUrl() string {
+	if x != nil {
+		return x.LocalProxyUrl
+	}
+	return ""
+}
+
 var File_api_sam_proto protoreflect.FileDescriptor
 
 const file_api_sam_proto_rawDesc = "" +
@@ -429,7 +541,14 @@ const file_api_sam_proto_rawDesc = "" +
 	"expiration\x18\x05 \x01(\x03R\n" +
 	"expiration\x12\x1f\n" +
 	"\vknown_peers\x18\x06 \x03(\tR\n" +
-	"knownPeersB\x1bZ\x19github.com/google/sam/apib\x06proto3"
+	"knownPeers\"W\n" +
+	"\vServiceInfo\x12\x12\n" +
+	"\x04type\x18\x01 \x01(\tR\x04type\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\x12 \n" +
+	"\vdescription\x18\x03 \x01(\tR\vdescription\"U\n" +
+	"\x12DiscoveredProvider\x12\x17\n" +
+	"\apeer_id\x18\x01 \x01(\tR\x06peerId\x12&\n" +
+	"\x0flocal_proxy_url\x18\x02 \x01(\tR\rlocalProxyUrlB\x1bZ\x19github.com/google/sam/apib\x06proto3"
 
 var (
 	file_api_sam_proto_rawDescOnce sync.Once
@@ -444,14 +563,16 @@ func file_api_sam_proto_rawDescGZIP() []byte {
 }
 
 var file_api_sam_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_api_sam_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
+var file_api_sam_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
 var file_api_sam_proto_goTypes = []any{
-	(MeshEvent_Type)(0),    // 0: sam.v1.MeshEvent.Type
-	(*AuthFrame)(nil),      // 1: sam.v1.AuthFrame
-	(*AuthResponse)(nil),   // 2: sam.v1.AuthResponse
-	(*MeshEvent)(nil),      // 3: sam.v1.MeshEvent
-	(*EnrollRequest)(nil),  // 4: sam.v1.EnrollRequest
-	(*EnrollResponse)(nil), // 5: sam.v1.EnrollResponse
+	(MeshEvent_Type)(0),        // 0: sam.v1.MeshEvent.Type
+	(*AuthFrame)(nil),          // 1: sam.v1.AuthFrame
+	(*AuthResponse)(nil),       // 2: sam.v1.AuthResponse
+	(*MeshEvent)(nil),          // 3: sam.v1.MeshEvent
+	(*EnrollRequest)(nil),      // 4: sam.v1.EnrollRequest
+	(*EnrollResponse)(nil),     // 5: sam.v1.EnrollResponse
+	(*ServiceInfo)(nil),        // 6: sam.v1.ServiceInfo
+	(*DiscoveredProvider)(nil), // 7: sam.v1.DiscoveredProvider
 }
 var file_api_sam_proto_depIdxs = []int32{
 	0, // 0: sam.v1.MeshEvent.type:type_name -> sam.v1.MeshEvent.Type
@@ -473,7 +594,7 @@ func file_api_sam_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_api_sam_proto_rawDesc), len(file_api_sam_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   5,
+			NumMessages:   7,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

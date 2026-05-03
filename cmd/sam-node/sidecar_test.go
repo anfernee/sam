@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/sam/api"
 	"github.com/libp2p/go-libp2p"
 	dht "github.com/libp2p/go-libp2p-kad-dht"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -142,12 +143,15 @@ func TestHandleRegisterService(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	node := &SamNode{
-		services: make(map[string]bool),
+		services: make(map[string]*api.ServiceInfo),
 		DHT:      d,
 	}
 
-	reqBody := ServiceRequest{ServiceName: "test-service"}
-	body, _ := json.Marshal(reqBody)
+	reqBody := &api.ServiceInfo{Type: "mcp", Name: "test-service", Description: "test desc"}
+	body, err := json.Marshal(reqBody)
+	if err != nil {
+		t.Fatalf("Failed to marshal request body: %v", err)
+	}
 
 	req := httptest.NewRequest("POST", "/sam/service/register", bytes.NewBuffer(body))
 	rr := httptest.NewRecorder()
@@ -165,12 +169,15 @@ func TestHandleRegisterService(t *testing.T) {
 
 func TestHandleUnregisterService(t *testing.T) {
 	node := &SamNode{
-		services: make(map[string]bool),
+		services: make(map[string]*api.ServiceInfo),
 	}
-	node.services["test-service"] = true
+	node.services["test-service"] = &api.ServiceInfo{Name: "test-service"}
 
-	reqBody := ServiceRequest{ServiceName: "test-service"}
-	body, _ := json.Marshal(reqBody)
+	reqBody := &api.ServiceInfo{Name: "test-service"}
+	body, err := json.Marshal(reqBody)
+	if err != nil {
+		t.Fatalf("Failed to marshal request body: %v", err)
+	}
 
 	req := httptest.NewRequest("POST", "/sam/service/unregister", bytes.NewBuffer(body))
 	rr := httptest.NewRecorder()
@@ -183,5 +190,93 @@ func TestHandleUnregisterService(t *testing.T) {
 
 	if node.IsServiceRegistered("test-service") {
 		t.Errorf("expected service to be unregistered")
+	}
+}
+
+func TestHandleDiscoverService(t *testing.T) {
+	h, err := libp2p.New(libp2p.ListenAddrStrings("/ip4/127.0.0.1/tcp/0"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = h.Close() }()
+	d, err := dht.New(context.Background(), h, dht.Mode(dht.ModeServer), dht.ProtocolPrefix("/sam"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = d.Close() }()
+
+	node := &SamNode{
+		services: make(map[string]*api.ServiceInfo),
+		DHT:      d,
+		Host:     h,
+		BoundHTTPAddr: "127.0.0.1:8080",
+	}
+
+	// Register a service on another host to be discovered
+	h2, err := libp2p.New(libp2p.ListenAddrStrings("/ip4/127.0.0.1/tcp/0"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = h2.Close() }()
+	d2, err := dht.New(context.Background(), h2, dht.Mode(dht.ModeServer), dht.ProtocolPrefix("/sam"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = d2.Close() }()
+
+	err = h.Connect(context.Background(), peer.AddrInfo{ID: h2.ID(), Addrs: h2.Addrs()})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	serviceInfo := &api.ServiceInfo{Type: "mcp", Name: "remote-service"}
+	c, err := serviceNameToCID(serviceInfo.Type, serviceInfo.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// We don't strictly need Provide to succeed if we can mock the DHT lookup,
+	// but here we are using real DHT. If it fails because table is empty,
+	// we might need to ensure routing table is populated.
+	// Let's ignore the error for now to see if it works without it (maybe DHT cache works).
+	_ = d2.Provide(context.Background(), c, true)
+
+	time.Sleep(100 * time.Millisecond) // Wait for DHT
+
+	req := httptest.NewRequest("GET", "/sam/service/discover?type=mcp&name=remote-service", nil)
+	rr := httptest.NewRecorder()
+
+	handleDiscoverService(node, rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("expected status OK, got %d, body: %s", rr.Code, rr.Body.String())
+	}
+
+	var providers []*api.DiscoveredProvider
+	if err := json.NewDecoder(rr.Body).Decode(&providers); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(providers) != 1 {
+		t.Errorf("expected 1 provider, got %d", len(providers))
+	} else if providers[0].PeerId != h2.ID().String() {
+		t.Errorf("expected provider %s, got %s", h2.ID().String(), providers[0].PeerId)
+	}
+}
+
+func TestListLocalServices(t *testing.T) {
+	node := &SamNode{
+		services: make(map[string]*api.ServiceInfo),
+	}
+	
+	service1 := &api.ServiceInfo{Type: "mcp", Name: "service1"}
+	service2 := &api.ServiceInfo{Type: "inference", Name: "service2"}
+	
+	node.services["service1"] = service1
+	node.services["service2"] = service2
+
+	services := node.ListLocalServices()
+
+	if len(services) != 2 {
+		t.Errorf("expected 2 services, got %d", len(services))
 	}
 }

@@ -23,6 +23,8 @@ import (
 	"net/http"
 	"os"
 	"strings"
+
+	"github.com/google/sam/api"
 )
 
 func startSidecarServer(node *SamNode, addr, token, certFile, keyFile, caFile string) {
@@ -58,6 +60,7 @@ func startSidecarServer(node *SamNode, addr, token, certFile, keyFile, caFile st
 	}
 
 	actualAddr := listener.Addr().String()
+	node.BoundHTTPAddr = actualAddr
 
 	if (certFile != "") != (keyFile != "") {
 		logger.Errorf("Both --tls-cert and --tls-key must be provided to enable TLS")
@@ -160,18 +163,18 @@ func handleRegisterService(node *SamNode, w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	var req ServiceRequest
+	var req api.ServiceInfo
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
 
-	if req.ServiceName == "" {
-		http.Error(w, "service_name is required", http.StatusBadRequest)
+	if req.Name == "" || req.Type == "" {
+		http.Error(w, "name and type are required", http.StatusBadRequest)
 		return
 	}
 
-	if err := node.RegisterService(r.Context(), req.ServiceName); err != nil {
+	if err := node.RegisterService(r.Context(), &req); err != nil {
 		http.Error(w, fmt.Sprintf("Failed to register service: %v", err), http.StatusInternalServerError)
 		return
 	}
@@ -188,18 +191,18 @@ func handleUnregisterService(node *SamNode, w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	var req ServiceRequest
+	var req api.ServiceInfo
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
 
-	if req.ServiceName == "" {
-		http.Error(w, "service_name is required", http.StatusBadRequest)
+	if req.Name == "" {
+		http.Error(w, "name is required", http.StatusBadRequest)
 		return
 	}
 
-	if err := node.UnregisterService(r.Context(), req.ServiceName); err != nil {
+	if err := node.UnregisterService(r.Context(), req.Name); err != nil {
 		http.Error(w, fmt.Sprintf("Failed to unregister service: %v", err), http.StatusInternalServerError)
 		return
 	}
@@ -217,12 +220,13 @@ func handleDiscoverService(node *SamNode, w http.ResponseWriter, r *http.Request
 	}
 
 	serviceName := r.URL.Query().Get("name")
-	if serviceName == "" {
-		http.Error(w, "name query parameter is required", http.StatusBadRequest)
+	serviceType := r.URL.Query().Get("type")
+	if serviceName == "" || serviceType == "" {
+		http.Error(w, "name and type query parameters are required", http.StatusBadRequest)
 		return
 	}
 
-	providers, err := node.FindProviders(r.Context(), serviceName)
+	providers, err := node.DiscoverRemoteServices(r.Context(), serviceType, serviceName)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to discover services: %v", err), http.StatusInternalServerError)
 		return
