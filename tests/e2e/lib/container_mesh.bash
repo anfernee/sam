@@ -46,7 +46,10 @@ if [[ -z "${MESH_HELPERS_LOADED:-}" ]]; then
 
   mesh_setup_env() {
     mesh_cleanup_stale_resources
-    mesh_build_runtime_image
+    
+    if ! docker image inspect "${MESH_RUNTIME_IMAGE}" >/dev/null 2>&1; then
+      mesh_build_runtime_image
+    fi
 
     MESH_PREFIX="mesh-${BATS_TEST_NUMBER}-$$-$(date +%s)"
     MESH_NETWORK="${MESH_PREFIX}-net"

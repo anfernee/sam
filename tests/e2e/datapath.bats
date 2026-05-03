@@ -7,7 +7,7 @@ setup() {
     skip "docker not available or daemon not running"
   fi
 
-  if [[ ! -x "./bin/sam-node" || ! -x "./bin/sam-hub" ]]; then
+  if [[ ! -x "./bin/sam-node" || ! -x "./bin/sam-hub" || ! -x "./bin/mcp-client" ]]; then
     skip "missing binaries; run: make build"
   fi
 
@@ -191,11 +191,12 @@ except Exception as e:
 
   # Send message via POST from Node 1 to Node 2's service
   test_message="{\"jsonrpc\":\"2.0\",\"method\":\"ping\",\"id\":1}"
-  run docker run --rm --network "${MESH_NETWORK}" python:3.12 python3 -c "
+  run docker run --rm --network "${MESH_NETWORK}" -e MSG="${test_message}" python:3.12 python3 -c "
 import urllib.request
+import os
 req = urllib.request.Request(
     \"http://sam-node-1:8080/sam/${node2_peer_id}/mcp/stdio-tool/\",
-    data='${test_message}'.encode('utf-8'),
+    data=os.environ['MSG'].encode('utf-8'),
     headers={
         \"Authorization\": \"Bearer secret-token\",
         \"Content-Type\": \"application/json\"
