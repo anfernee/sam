@@ -5,12 +5,17 @@ metadata:
   namespace: ${NAMESPACE}
 spec:
   type: LoadBalancer
+  loadBalancerClass: "networking.gke.io/l4-regional-external"
   loadBalancerIP: ${LOAD_BALANCER_IP}
   ports:
     - port: 4001
       targetPort: 4001
       protocol: TCP
-      name: libp2p
+      name: libp2p-tcp
+    - port: 4001
+      targetPort: 4001
+      protocol: UDP
+      name: libp2p-udp
   selector:
     app: sam-hub-${ENV_NAME}
 ---
@@ -34,9 +39,12 @@ spec:
         image: your-registry/sam-hub:${IMAGE_TAG}
         ports:
         - containerPort: 4001
-        env:
-        - name: SAM_EXTERNAL_MULTIADDR
-          value: "${EXTERNAL_MULTIADDR}"
+          protocol: TCP
+        - containerPort: 4001
+          protocol: UDP
+        args:
+        - "--listen=/ip4/0.0.0.0/tcp/4001,/ip4/0.0.0.0/udp/4001/quic-v1"
+        - "--external-multiaddr=${EXTERNAL_MULTIADDR}"
         
         # Critical for multi-tenant clusters: prevent testnet from starving prod
         resources:

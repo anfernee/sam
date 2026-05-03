@@ -53,7 +53,7 @@ spec:
         args: 
           - "run"
           - "--config=/etc/sam/sam-node.yaml"
-          - "--hub=/dns4/sam-hub-${ENV_NAME}.sam-${ENV_NAME}.svc.cluster.local/tcp/4001"
+          - "--hub=/dns4/sam-hub-${ENV_NAME}.sam-${ENV_NAME}.svc.cluster.local/udp/4001/quic-v1"
         ports:
         - containerPort: 8080
         resources:
