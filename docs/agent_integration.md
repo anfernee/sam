@@ -44,7 +44,7 @@ async def main():
             tools = await client.get_tools()
             print(f"Discovered {len(tools)} tools:")
             for tool in tools:
-                print(f" - {tool.name}: {tool.description}")
+                print(f" - {tool['name']}: {tool['description']}")
 
             # Call the get_mesh_info tool to get information about the mesh
             print("\nCalling get_mesh_info tool...")
