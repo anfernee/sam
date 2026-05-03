@@ -94,22 +94,24 @@ var (
 	tlsCertFile           string
 	tlsKeyFile            string
 	tlsCAFile             string
+	externalMultiaddrs    []string
 )
 
 var logger = golog.Logger("sam-hub")
 
 // Hub handles identity bridging and network discovery
 type Hub struct {
-	Host       host.Host
-	DHT        *dht.IpfsDHT
-	Providers  map[string]*oidc.Provider
-	KeyRing    *KeyRing
-	MeshID     string
-	PubSub     *pubsub.PubSub
-	EventTopic *pubsub.Topic
-	gater      *hubConnGate
-	Policy     *api.PolicyConfig
-	limiter    *rate.Limiter
+	Host          host.Host
+	DHT           *dht.IpfsDHT
+	Providers     map[string]*oidc.Provider
+	KeyRing       *KeyRing
+	MeshID        string
+	PubSub        *pubsub.PubSub
+	EventTopic    *pubsub.Topic
+	gater         *hubConnGate
+	Policy        *api.PolicyConfig
+	limiter       *rate.Limiter
+	ExternalAddrs []string
 }
 
 // NewHub starts a host supporting both QUIC and TCP (with TLS 1.3)
@@ -188,14 +190,15 @@ func NewHub(ctx context.Context, policy *api.PolicyConfig) (*Hub, error) {
 	}
 
 	hub := &Hub{
-		Host:      h,
-		DHT:       kadDHT,
-		gater:     gater,
-		Providers: providers,
-		KeyRing:   kr,
-		MeshID:    meshName,
-		Policy:    policy,
-		limiter:   rate.NewLimiter(rate.Limit(EnrollRateLimit), EnrollBurst),
+		Host:          h,
+		DHT:           kadDHT,
+		gater:         gater,
+		Providers:     providers,
+		KeyRing:       kr,
+		MeshID:        meshName,
+		Policy:        policy,
+		limiter:       rate.NewLimiter(rate.Limit(EnrollRateLimit), EnrollBurst),
+		ExternalAddrs: externalMultiaddrs,
 	}
 
 	h.Network().Notify(&notifier{hub: hub})
@@ -321,8 +324,18 @@ func (h *Hub) handleEnroll(s network.Stream) {
 
 func (h *Hub) sendEnrollResponse(s network.Stream, biscuitToken []byte, errMsg string, expiration int64, knownPeers []string, policies []string) {
 	var hubAddrs []string
-	for _, addr := range h.Host.Addrs() {
-		hubAddrs = append(hubAddrs, addr.String()+"/p2p/"+h.Host.ID().String())
+	if len(h.ExternalAddrs) > 0 {
+		for _, addr := range h.ExternalAddrs {
+			fullAddr := addr
+			if !strings.Contains(addr, "/p2p/") {
+				fullAddr = addr + "/p2p/" + h.Host.ID().String()
+			}
+			hubAddrs = append(hubAddrs, fullAddr)
+		}
+	} else {
+		for _, addr := range h.Host.Addrs() {
+			hubAddrs = append(hubAddrs, addr.String()+"/p2p/"+h.Host.ID().String())
+		}
 	}
 
 	pubKey := h.KeyRing.GetCurrentPublicKey()
@@ -657,6 +670,7 @@ func main() {
 	rootCmd.Flags().StringVar(&clientID, "client-id", os.Getenv("SAM_OIDC_ID"), "OIDC Client ID")
 	rootCmd.Flags().StringVar(&biscuitHex, "key", os.Getenv("SAM_HUB_KEY"), "Hub Private Key (32-byte Hex)")
 	rootCmd.Flags().StringSliceVar(&listenAddrs, "listen", []string{"/ip4/0.0.0.0/udp/8080/quic-v1", "/ip4/0.0.0.0/tcp/8080"}, "libp2p Listen Addrs")
+	rootCmd.Flags().StringSliceVar(&externalMultiaddrs, "external-multiaddr", []string{}, "External multiaddrs to announce")
 	rootCmd.Flags().StringVar(&meshName, "mesh", DefaultMeshName, "Mesh federation name")
 	rootCmd.Flags().BoolVar(&insecureSkipTLSVerify, "insecure-skip-tls-verify", false, "Skip TLS verification for OIDC issuers")
 	rootCmd.Flags().StringVar(&logLevel, "log-level", "info", "Log level (debug, info, warn, error)")
