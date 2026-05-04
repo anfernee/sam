@@ -62,8 +62,10 @@ spec:
         args:
         - "--listen=/ip4/0.0.0.0/tcp/4001,/ip4/0.0.0.0/udp/4001/quic-v1"
         - "--external-multiaddr=${EXTERNAL_MULTIADDR}"
-        
-        # Critical for multi-tenant clusters: prevent testnet from starving prod
+        # 1. Trust Dex for humans/Google/GitHub. 2. Trust GKE for internal Canaries.
+        - "--oidc-issuer=https://auth.sam-mesh.dev,https://container.googleapis.com/v1/projects/${GCP_PROJECT_ID}/locations/${CLUSTER_REGION}/clusters/${CLUSTER_NAME}"
+        # 1. Dex CLI client ID. 2. Canary projected volume audience.
+        - "--audiences=sam-mesh-audience,sam-hub-audience"
         resources:
           requests:
             cpu: 100m
