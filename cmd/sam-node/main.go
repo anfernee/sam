@@ -55,7 +55,7 @@ var (
 	jwtPathFlag           string
 	clientIDFlag          string
 	clientSecretFlag      string
-	tokenURLFlag          string
+	oidcIssuerFlag        string
 	deviceAuthURLFlag     string
 	audienceFlag          string
 	hubPublicKeyFlag      string
@@ -148,11 +148,15 @@ func main() {
 					logger.Fatalf("Failed to read JWT file: %v", err)
 				}
 				jwtStr = strings.TrimSpace(string(data))
-			} else if tokenURLFlag != "" {
-				logger.Info("Fetching JWT via OIDC Client Credentials...")
+			} else if oidcIssuerFlag != "" {
+				logger.Info("Discovering OIDC endpoints...")
 				dummyNode := &SamNode{}
-				var err error
-				jwtStr, err = dummyNode.FetchJWT(context.Background(), tokenURLFlag, clientIDFlag, clientSecretFlag)
+				tokenURL, err := dummyNode.DiscoverTokenURL(context.Background(), oidcIssuerFlag)
+				if err != nil {
+					logger.Fatalf("Failed to discover OIDC endpoints: %v", err)
+				}
+				logger.Info("Fetching JWT via OIDC Client Credentials...")
+				jwtStr, err = dummyNode.FetchJWT(context.Background(), tokenURL, clientIDFlag, clientSecretFlag)
 				if err != nil {
 					logger.Fatalf("Failed to fetch JWT: %v", err)
 				}
@@ -220,7 +224,7 @@ func main() {
 			}
 
 			// Start renewal loop
-			node.StartRenewalLoop(ctx, tokenURLFlag, clientIDFlag, clientSecretFlag, jwtPathFlag)
+			node.StartRenewalLoop(ctx, oidcIssuerFlag, clientIDFlag, clientSecretFlag, jwtPathFlag)
 
 			node.Host.SetStreamHandler(api.AuthProtocolID, node.HandleAuthHandshake)
 
@@ -261,10 +265,20 @@ func main() {
 
 			dummyNode := &SamNode{Store: store}
 			deviceAuthURL := deviceAuthURLFlag
+			tokenURL := ""
+
+			if oidcIssuerFlag != "" {
+				logger.Info("Discovering OIDC endpoints...")
+				var err error
+				tokenURL, deviceAuthURL, err = dummyNode.DiscoverEndpoints(context.Background(), oidcIssuerFlag)
+				if err != nil {
+					logger.Fatalf("Failed to discover OIDC endpoints: %v", err)
+				}
+			}
+
 			if deviceAuthURL == "" {
 				deviceAuthURL = "https://oauth2.googleapis.com/device/code"
 			}
-			tokenURL := tokenURLFlag
 			if tokenURL == "" {
 				tokenURL = "https://oauth2.googleapis.com/token"
 			}
@@ -332,7 +346,7 @@ func main() {
 	runCmd.Flags().StringVar(&tlsCAFlag, "tls-ca", "", "Path to TLS CA for sidecar API mTLS")
 	rootCmd.PersistentFlags().StringVar(&hubAddr, "hub", DefaultHubURL, "Hub URL")
 	rootCmd.PersistentFlags().StringVar(&configFile, "config", DefaultConfigFile, "Path to sam-node.yaml configuration file")
-	rootCmd.PersistentFlags().StringVar(&tokenURLFlag, "token-url", "", "OIDC Token URL")
+	rootCmd.PersistentFlags().StringVar(&oidcIssuerFlag, "oidc-issuer", "", "OIDC Issuer URL")
 	rootCmd.PersistentFlags().StringVar(&deviceAuthURLFlag, "device-auth-url", "", "OIDC Device Authorization URL")
 	rootCmd.PersistentFlags().StringVar(&audienceFlag, "audience", api.DefaultAudience, "OIDC Audience")
 

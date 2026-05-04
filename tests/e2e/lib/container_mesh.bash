@@ -243,7 +243,7 @@ if [[ -z "${MESH_HELPERS_LOADED:-}" ]]; then
       --hub "/dns4/sam-hub/tcp/4002/p2p/${hub_peer_id}" \
       --client-id "sam-mesh-audience" \
       --client-secret "sam-e2e-secret" \
-      --token-url "http://mock-oidc:18080/token" \
+      --oidc-issuer "http://mock-oidc:18080" \
       --listen "/ip4/0.0.0.0/udp/5001/quic-v1" \
       --listen "/ip4/0.0.0.0/tcp/5002" \
       --bind-addr "0.0.0.0:8080" \
