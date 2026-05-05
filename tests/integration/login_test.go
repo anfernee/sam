@@ -102,6 +102,8 @@ func TestSamNodeLogin(t *testing.T) {
 		nodeBin,
 		"run",
 		"--hub", hubAddr,
+		"--bind-addr", "127.0.0.1:0",
+		"--api-token", "dummy-token",
 	)
 	// We expect it to keep running because it uses stored identity.
 	if err != context.DeadlineExceeded {

@@ -82,6 +82,8 @@ func TestSamNodeRunWithStoredIdentity(t *testing.T) {
 		"run",
 		"--listen", "/ip4/127.0.0.1/udp/0/quic-v1",
 		"--listen", "/ip4/127.0.0.1/tcp/0",
+		"--bind-addr", "127.0.0.1:0",
+		"--api-token", "dummy-token",
 	)
 	if err != context.DeadlineExceeded {
 		t.Fatalf("expected run command to keep running until timeout, got: %v\nstdout:\n%s\nstderr:\n%s", err, runOut, runErrOut)
