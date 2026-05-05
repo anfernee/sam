@@ -7,6 +7,7 @@ spec:
   type: LoadBalancer
   loadBalancerClass: "networking.gke.io/l4-regional-external"
   loadBalancerIP: ${LOAD_BALANCER_IP}
+  allocateLoadBalancerNodePorts: false
   ports:
     - port: 4001
       targetPort: 4001
@@ -16,6 +17,25 @@ spec:
       targetPort: 4001
       protocol: UDP
       name: libp2p-udp
+    - port: 80
+      targetPort: 9090
+      protocol: TCP
+      name: http
+  selector:
+    app: sam-hub-${ENV_NAME}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sam-hub-internal-${ENV_NAME}
+  namespace: ${NAMESPACE}
+spec:
+  type: ClusterIP
+  ports:
+    - port: 80
+      targetPort: 9090
+      protocol: TCP
+      name: http
   selector:
     app: sam-hub-${ENV_NAME}
 ---
