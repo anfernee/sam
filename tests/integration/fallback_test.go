@@ -27,13 +27,15 @@ import (
 	"testing"
 	"time"
 
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"github.com/biscuit-auth/biscuit-go/v2"
 	"github.com/biscuit-auth/biscuit-go/v2/parser"
 	"github.com/google/sam/api"
 	"github.com/libp2p/go-libp2p"
 	dht "github.com/libp2p/go-libp2p-kad-dht"
 	"github.com/libp2p/go-libp2p/core/crypto"
-	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-msgio"
 	"github.com/multiformats/go-multiaddr"
@@ -261,10 +263,24 @@ func startMockHubDynamic(t *testing.T, pubA, pubB ed25519.PublicKey) (peer.ID, s
 	}
 
 	var callCount int
-	h.SetStreamHandler(api.EnrollProtocolID, func(s network.Stream) {
-		defer func() { _ = s.Close() }()
-		callCount++
+	mux := http.NewServeMux()
+	mux.HandleFunc("/register", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, "Failed to read body", http.StatusBadRequest)
+			return
+		}
+		var req api.EnrollRequest
+		if err := proto.Unmarshal(body, &req); err != nil {
+			http.Error(w, "Invalid request format", http.StatusBadRequest)
+			return
+		}
 
+		callCount++
 		var pub []byte
 		if callCount == 1 {
 			pub = pubA
@@ -276,18 +292,27 @@ func startMockHubDynamic(t *testing.T, pubA, pubB ed25519.PublicKey) (peer.ID, s
 			BiscuitToken: []byte("mock-biscuit-token"),
 			HubPublicKey: pub,
 			HubAddresses: []string{h.Addrs()[0].String() + "/p2p/" + h.ID().String()},
+			KnownPeers:   []string{},
 		}
-		data, _ := proto.Marshal(resp)
-		writer := msgio.NewVarintWriter(s)
-		_ = writer.WriteMsg(data)
+		data, err := proto.Marshal(resp)
+		if err != nil {
+			http.Error(w, "Failed to marshal response", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/x-protobuf")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(data)
 	})
 
+	httpServer := httptest.NewServer(mux)
+
 	t.Cleanup(func() {
+		httpServer.Close()
 		_ = kdht.Close()
 		_ = h.Close()
 	})
 
-	return h.ID(), h.Addrs()[0].String() + "/p2p/" + h.ID().String()
+	return h.ID(), httpServer.URL
 }
 
 type safeBuffer struct {

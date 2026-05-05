@@ -301,7 +301,7 @@ func NewSamNode(ctx context.Context, privKey crypto.PrivKey, hubPubKey ed25519.P
 	return node, nil
 }
 
-func (n *SamNode) StartRenewalLoop(ctx context.Context, tokenURL, clientID, clientSecret, jwtPath string) {
+func (n *SamNode) StartRenewalLoop(ctx context.Context, issuerURL, clientID, clientSecret, jwtPath string) {
 	go func() {
 		for {
 			var renewAfter = DefaultRenewalFallback // Default fallback
@@ -329,8 +329,12 @@ func (n *SamNode) StartRenewalLoop(ctx context.Context, tokenURL, clientID, clie
 			case <-timer.C:
 				fmt.Println("Renewing enrollment...")
 				var newJWT string
-				if tokenURL != "" {
-					var err error
+				if issuerURL != "" {
+					tokenURL, err := n.DiscoverTokenURL(ctx, issuerURL)
+					if err != nil {
+						fmt.Printf("Failed to discover OIDC endpoints for renewal: %v\n", err)
+						continue
+					}
 					newJWT, err = n.FetchJWT(ctx, tokenURL, clientID, clientSecret)
 					if err != nil {
 						fmt.Printf("Failed to fetch JWT for renewal: %v\n", err)

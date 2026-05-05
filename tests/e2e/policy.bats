@@ -210,7 +210,7 @@ EOF"
     -v "${POLICY_VOL}:/etc/sam" \
     "sam-node:local" \
     run \
-    --hub "/dns4/sam-hub/tcp/4002/p2p/${hub_peer_id}" \
+    --hub "http://sam-hub:9090" \
     --client-id "sam-e2e" \
     --client-secret "sam-e2e-secret" \
     --oidc-issuer "http://mock-oidc:18080" \
