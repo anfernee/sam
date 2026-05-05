@@ -60,7 +60,7 @@ spec:
         args: 
           - "run"
           - "--config=/etc/sam/sam-node.yaml"
-          - "--hub=/dns4/sam-hub-${ENV_NAME}.sam-${ENV_NAME}.svc.cluster.local/udp/4001/quic-v1"
+          - "--hub=http://sam-hub-internal-${ENV_NAME}.sam-${ENV_NAME}.svc.cluster.local"
           - "--jwt-path=/var/run/secrets/tokens/sam-token"
         ports:
         - containerPort: 8080
