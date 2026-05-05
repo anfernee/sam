@@ -168,7 +168,10 @@ func NewHub(ctx context.Context, policy *api.PolicyConfig) (*Hub, error) {
 			tr := &http.Transport{
 				TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 			}
-			client := &http.Client{Transport: tr}
+			client := &http.Client{
+				Timeout:   30 * time.Second,
+				Transport: tr,
+			}
 			providerCtx = oidc.ClientContext(ctx, client)
 		}
 		provider, err := oidc.NewProvider(providerCtx, iss)
@@ -269,7 +272,7 @@ func (h *Hub) handleAuthHandshake(s network.Stream) {
 	}
 
 	logger.Infof("[AuthN] Successfully authenticated peer %s", remotePeer)
-	
+
 	// Update active nodes gauge and gater state
 	h.gater.mu.Lock()
 	if !h.gater.authenticated[remotePeer] {
@@ -299,7 +302,7 @@ func (h *Hub) handleAuthHandshake(s network.Stream) {
 			}
 		}
 	}
-	
+
 	// Send ACK back to client
 	writer := msgio.NewVarintWriter(s)
 	resp := &api.AuthResponse{Success: true}
@@ -507,7 +510,6 @@ func (h *Hub) mintBiscuitToken(claims jwt.MapClaims, token *oidc.IDToken, remote
 // startWatchdog periodically checks for peers that have connected but not completed OIDC
 // authentication within the grace period, and evicts them from the network.
 
-
 func (h *Hub) startRotation(ctx context.Context) {
 	if keyRotationInterval <= 0 {
 		return
@@ -621,8 +623,6 @@ func main() {
 			// Start key rotation if enabled
 			h.startRotation(ctx)
 
-
-
 			startHTTPServer(h, bindAddress, adminToken, tlsCertFile, tlsKeyFile, tlsCAFile, &isHubReady)
 
 			logger.Infof("SAM Hub Online (QUIC + TCP)")
@@ -700,6 +700,7 @@ func main() {
 			}
 
 			client := &http.Client{
+				Timeout: 30 * time.Second,
 				Transport: &http.Transport{
 					TLSClientConfig: tlsConfig,
 				},
