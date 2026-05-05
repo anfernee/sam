@@ -227,6 +227,13 @@ func main() {
 				node.keysMu.Unlock()
 			}
 
+			// Register static services from config
+			if nodeConfig != nil && len(nodeConfig.Services) > 0 {
+				if err := node.RegisterStaticServices(context.Background(), nodeConfig.Services); err != nil {
+					logger.Errorf("Failed to register static services: %v", err)
+				}
+			}
+
 			// Start renewal loop
 			node.StartRenewalLoop(ctx, oidcIssuerFlag, clientIDFlag, clientSecretFlag, jwtPathFlag)
 

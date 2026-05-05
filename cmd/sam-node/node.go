@@ -229,48 +229,7 @@ func NewSamNode(ctx context.Context, privKey crypto.PrivKey, hubPubKey ed25519.P
 	node.startKeyPruning(ctx, keyGracePeriod)
 
 	// Register static services from config
-	if nodeConfig != nil {
-		var errs []error
-		for _, sCfg := range nodeConfig.Services {
-			sType, err := parseServiceType(sCfg.Type)
-			if err != nil {
-				logger.Errorf("[ServiceRegistry] Invalid service type %q for static service %s: %v", sCfg.Type, sCfg.Name, err)
-				errs = append(errs, fmt.Errorf("invalid service type %q for static service %s: %w", sCfg.Type, sCfg.Name, err))
-				continue
-			}
 
-			req := &api.RegisterServiceRequest{
-				Service: &api.ServiceInfo{
-					Type:        sType,
-					Name:        sCfg.Name,
-					Description: sCfg.Description,
-				},
-			}
-
-			if sCfg.TargetURL != "" {
-				req.Backend = &api.RegisterServiceRequest_TargetUrl{TargetUrl: sCfg.TargetURL}
-			} else if len(sCfg.Command) > 0 {
-				req.Backend = &api.RegisterServiceRequest_Command{
-					Command: &api.CommandBackend{
-						Command: sCfg.Command,
-						Env:     sCfg.Env,
-					},
-				}
-			} else {
-				logger.Errorf("[ServiceRegistry] Static service %s has no backend specified", sCfg.Name)
-				errs = append(errs, fmt.Errorf("static service %s has no backend specified", sCfg.Name))
-				continue
-			}
-
-			if err := node.RegisterService(ctx, req); err != nil {
-				logger.Errorf("[ServiceRegistry] Failed to register static service %s: %v", sCfg.Name, err)
-				errs = append(errs, fmt.Errorf("failed to register static service %s: %w", sCfg.Name, err))
-			}
-		}
-		if len(errs) > 0 {
-			return nil, fmt.Errorf("failed to register static services: %w", errors.Join(errs...))
-		}
-	}
 
 	// Start Ingress HTTP Server
 	if err := node.StartIngressServer(ctx); err != nil {
@@ -278,6 +237,50 @@ func NewSamNode(ctx context.Context, privKey crypto.PrivKey, hubPubKey ed25519.P
 	}
 
 	return node, nil
+}
+
+func (n *SamNode) RegisterStaticServices(ctx context.Context, services []api.ServiceConfig) error {
+	var errs []error
+	for _, sCfg := range services {
+		sType, err := parseServiceType(sCfg.Type)
+		if err != nil {
+			logger.Errorf("[ServiceRegistry] Invalid service type %q for static service %s: %v", sCfg.Type, sCfg.Name, err)
+			errs = append(errs, fmt.Errorf("invalid service type %q for static service %s: %w", sCfg.Type, sCfg.Name, err))
+			continue
+		}
+
+		req := &api.RegisterServiceRequest{
+			Service: &api.ServiceInfo{
+				Type:        sType,
+				Name:        sCfg.Name,
+				Description: sCfg.Description,
+			},
+		}
+
+		if sCfg.TargetURL != "" {
+			req.Backend = &api.RegisterServiceRequest_TargetUrl{TargetUrl: sCfg.TargetURL}
+		} else if len(sCfg.Command) > 0 {
+			req.Backend = &api.RegisterServiceRequest_Command{
+				Command: &api.CommandBackend{
+					Command: sCfg.Command,
+					Env:     sCfg.Env,
+				},
+			}
+		} else {
+			logger.Errorf("[ServiceRegistry] Static service %s has no backend specified", sCfg.Name)
+			errs = append(errs, fmt.Errorf("static service %s has no backend specified", sCfg.Name))
+			continue
+		}
+
+		if err := n.RegisterService(ctx, req); err != nil {
+			logger.Errorf("[ServiceRegistry] Failed to register static service %s: %v", sCfg.Name, err)
+			errs = append(errs, fmt.Errorf("failed to register static service %s: %w", sCfg.Name, err))
+		}
+	}
+	if len(errs) > 0 {
+		return fmt.Errorf("failed to register static services: %w", errors.Join(errs...))
+	}
+	return nil
 }
 
 func (n *SamNode) ConnectAndAuthWithHub(ctx context.Context, addr multiaddr.Multiaddr) error {
