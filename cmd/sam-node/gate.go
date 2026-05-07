@@ -19,6 +19,8 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/google/sam/api"
+
 	"github.com/libp2p/go-libp2p/core/connmgr"
 	"github.com/libp2p/go-libp2p/core/control"
 	"github.com/libp2p/go-libp2p/core/network"
@@ -28,7 +30,6 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-
 )
 
 var _ connmgr.ConnectionGater = (*nodeConnGate)(nil)
@@ -134,6 +135,34 @@ func (n *SamNode) HandleMCPStream(s network.Stream) {
 		}, nil, nil
 	})
 
+	// Add list_local_services tool
+	// TODO: Commonize this function since is also present in mcp.go
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "list_local_services",
+		Description: "List services registered on the local node. Optionally filter by type.",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, params struct {
+		Type string `json:"type,omitempty" jsonschema:"Optional service type filter (mcp, inference, a2a). Empty means all types."`
+	}) (*mcp.CallToolResult, any, error) {
+		typeFilter := api.ServiceType_SERVICE_TYPE_UNSPECIFIED
+		if params.Type != "" {
+			parsed, err := parseServiceType(params.Type)
+			if err != nil {
+				return nil, nil, err
+			}
+			typeFilter = parsed
+		}
+		services := n.ListLocalServices(typeFilter)
+		respData, err := json.Marshal(services)
+		if err != nil {
+			return nil, nil, err
+		}
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{
+				&mcp.TextContent{Text: string(respData)},
+			},
+		}, nil, nil
+	})
+
 	ctx := context.Background()
 	if err := server.Run(ctx, transport); err != nil {
 		fmt.Printf("MCP server error on stream from %s: %v\n", s.Conn().RemotePeer(), err)
@@ -172,11 +201,7 @@ func (t *StreamTransport) Read(ctx context.Context) (jsonrpc.Message, error) {
 	}
 	defer t.r.ReleaseMsg(msg)
 
-	var jsonRpcMsg jsonrpc.Message
-	if err := json.Unmarshal(msg, &jsonRpcMsg); err != nil {
-		return nil, err
-	}
-	return jsonRpcMsg, nil
+	return jsonrpc.DecodeMessage(msg)
 }
 
 // Close closes the stream.
@@ -194,11 +219,9 @@ func (t *StreamTransport) SessionID() string {
 	return t.s.Conn().RemotePeer().String()
 }
 
-
-
 // Write writes a message to the stream.
 func (t *StreamTransport) Write(ctx context.Context, msg jsonrpc.Message) error {
-	data, err := json.Marshal(msg)
+	data, err := jsonrpc.EncodeMessage(msg)
 	if err != nil {
 		return err
 	}

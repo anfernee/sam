@@ -63,9 +63,19 @@ func NewMCPHandler(node *SamNode) http.Handler {
 	// Add list_local_services tool
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "list_local_services",
-		Description: "List services registered on the local node",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, params struct{}) (*mcp.CallToolResult, any, error) {
-		services := node.ListLocalServices()
+		Description: "List services registered on the local node. Optionally filter by type.",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, params struct {
+		Type string `json:"type,omitempty" jsonschema:"Optional service type filter (mcp, inference, a2a). Empty means all types."`
+	}) (*mcp.CallToolResult, any, error) {
+		typeFilter := api.ServiceType_SERVICE_TYPE_UNSPECIFIED
+		if params.Type != "" {
+			parsed, err := parseServiceType(params.Type)
+			if err != nil {
+				return nil, nil, err
+			}
+			typeFilter = parsed
+		}
+		services := node.ListLocalServices(typeFilter)
 		respData, err := json.Marshal(services)
 		if err != nil {
 			return nil, nil, err
@@ -80,10 +90,10 @@ func NewMCPHandler(node *SamNode) http.Handler {
 	// Add discover_remote_services tool
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "discover_remote_services",
-		Description: "Discover remote services in the mesh",
+		Description: "Discover remote services in the mesh. Provide only `type` to browse every reachable service of that type (returns name + description for each); add `name` to target a specific service.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, params struct {
 		Type string `json:"type" jsonschema:"Service type (mcp, inference, a2a)"`
-		Name string `json:"name" jsonschema:"Service name"`
+		Name string `json:"name,omitempty" jsonschema:"Optional service name. Omit to list all services of the given type."`
 	}) (*mcp.CallToolResult, any, error) {
 		serviceType, err := parseServiceType(params.Type)
 		if err != nil || serviceType == api.ServiceType_SERVICE_TYPE_UNSPECIFIED {
@@ -359,14 +369,12 @@ func (n *SamNode) callMCPToolOnce(ctx context.Context, targetPeer peer.ID, toolN
 		return nil, fmt.Errorf("failed to connect client: %w", err)
 	}
 
+	// We don't need to marshall the params, the SDK takes care of it
+	// Passing pre-marshaled []byte triggers encoding/json's base64 which gets rejected
 	callParams := &mcp.CallToolParams{
-		Name: toolName,
+		Name:      toolName,
+		Arguments: params,
 	}
-	paramsBytes, err := json.Marshal(params)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal params for tool %s: %w", toolName, err)
-	}
-	callParams.Arguments = paramsBytes // Assume it takes bytes or raw message!
 
 	res, err := session.CallTool(ctx, callParams)
 	if err != nil {
@@ -374,4 +382,26 @@ func (n *SamNode) callMCPToolOnce(ctx context.Context, targetPeer peer.ID, toolN
 	}
 
 	return res, nil
+}
+
+// fetchRemoteServiceCatalog calls the remote peer's list_local_services
+// MCP tool with the type filter and returns the parsed catalog.
+func (n *SamNode) fetchRemoteServiceCatalog(ctx context.Context, peerID peer.ID, typeStr string) ([]*api.ServiceInfo, error) {
+	res, err := n.callMCPToolOnce(ctx, peerID, "list_local_services", map[string]string{"type": typeStr})
+	if err != nil {
+		return nil, err
+	}
+	if res == nil || len(res.Content) == 0 {
+		return nil, fmt.Errorf("empty response")
+	}
+	text, ok := res.Content[0].(*mcp.TextContent)
+	if !ok {
+		return nil, fmt.Errorf("unexpected content type: %T", res.Content[0])
+	}
+	var services []*api.ServiceInfo
+	if err := json.Unmarshal([]byte(text.Text), &services); err != nil {
+		logger.Warnf("[Discovery] catalog unmarshal failed; raw text from %s: %q", peerID, text.Text)
+		return nil, fmt.Errorf("unmarshal: %w", err)
+	}
+	return services, nil
 }
