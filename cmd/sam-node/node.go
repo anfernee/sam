@@ -1066,7 +1066,7 @@ func (n *SamNode) discoverServicesByName(ctx context.Context, serviceType api.Se
 	if err != nil {
 		return nil, err
 	}
-discovered := []*api.DiscoveredProvider{}
+	discovered := []*api.DiscoveredProvider{}
 	for _, p := range peers {
 		if p.ID == n.Host.ID() {
 			continue
@@ -1112,10 +1112,12 @@ func (n *SamNode) discoverServicesByType(ctx context.Context, serviceType api.Se
 			results <- peerCatalog{peerID: peerID, services: services}
 		}(p.ID)
 	}
-	wg.Wait()
-	close(results)
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
 
-discovered := []*api.DiscoveredProvider{}
+	discovered := []*api.DiscoveredProvider{}
 	for r := range results {
 		for _, info := range r.services {
 			discovered = append(discovered, &api.DiscoveredProvider{
@@ -1135,7 +1137,7 @@ func (n *SamNode) ListLocalServices(typeFilter api.ServiceType) []*api.ServiceIn
 	n.servicesMu.RLock()
 	defer n.servicesMu.RUnlock()
 
-services := []*api.ServiceInfo{}
+	services := []*api.ServiceInfo{}
 	for _, manifest := range n.services {
 		if typeFilter != api.ServiceType_SERVICE_TYPE_UNSPECIFIED && manifest.Info.Type != typeFilter {
 			continue
