@@ -50,7 +50,7 @@ jobs:
           type=raw,value=stable,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
 
     - name: Build and push Hub image
-      uses: docker/build-push-action@v6
+      uses: docker/build-push-action@v7
       with:
         context: .
         file: Dockerfile.sam-hub
@@ -72,7 +72,7 @@ jobs:
           type=raw,value=stable,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
 
     - name: Build and push Node image
-      uses: docker/build-push-action@v6
+      uses: docker/build-push-action@v7
       with:
         context: .
         file: Dockerfile.sam-node
