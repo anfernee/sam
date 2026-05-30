@@ -112,7 +112,6 @@ spec:
       - name: tls-certs
         secret:
           secretName: hub-sam-mesh-tls
-          optional: true
 ---
 apiVersion: monitoring.googleapis.com/v1
 kind: PodMonitoring
