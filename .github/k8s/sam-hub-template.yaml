@@ -57,6 +57,13 @@ spec:
       containers:
       - name: sam-hub
         image: ghcr.io/google/sam-hub:${IMAGE_TAG}
+        env:
+        - name: SAM_HUB_KEY
+          valueFrom:
+            secretKeyRef:
+              name: sam-hub-secret
+              key: sam-hub-key
+              optional: true # Make it optional so it doesn't block local kind testing if not created
         ports:
         - containerPort: 4001
           protocol: TCP
