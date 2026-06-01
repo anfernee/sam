@@ -262,6 +262,9 @@ func main() {
 
 				node.mu.Lock()
 				for k, v := range enrollKnownPeers {
+					if node.Host != nil && k == node.Host.ID().String() {
+						continue
+					}
 					node.knownPeers[k] = v
 				}
 				node.mu.Unlock()
@@ -564,6 +567,9 @@ func (n *SamNode) Enroll(ctx context.Context, jwt string) error {
 	// Add known peers from response
 	n.mu.Lock()
 	for _, p := range enrollResp.KnownPeers {
+		if n.Host != nil && p == n.Host.ID().String() {
+			continue
+		}
 		n.knownPeers[p] = true
 		fmt.Printf("[Enroll] Added known peer from hub: %s\n", p)
 	}
