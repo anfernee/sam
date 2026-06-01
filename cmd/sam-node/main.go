@@ -123,7 +123,11 @@ func main() {
 			if len(storedPubKey) > 0 {
 				hubPubKey = storedPubKey
 				for _, addrStr := range storedAddrs {
-					ma, _ := multiaddr.NewMultiaddr(addrStr)
+					ma, err := multiaddr.NewMultiaddr(addrStr)
+					if err != nil {
+						logger.Warnf("Failed to parse stored hub address %q: %v", addrStr, err)
+						continue
+					}
 					hubAddrs = append(hubAddrs, ma)
 				}
 			}
@@ -190,10 +194,14 @@ func main() {
 						if err == nil {
 							ip := net.ParseIP(host)
 							var maddr multiaddr.Multiaddr
+							var parseErr error
 							if ip != nil {
-								maddr, _ = multiaddr.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/%s", host, port))
+								maddr, parseErr = multiaddr.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/%s", host, port))
 							} else {
-								maddr, _ = multiaddr.NewMultiaddr(fmt.Sprintf("/dns4/%s/tcp/%s", host, port))
+								maddr, parseErr = multiaddr.NewMultiaddr(fmt.Sprintf("/dns4/%s/tcp/%s", host, port))
+							}
+							if parseErr != nil {
+								logger.Fatalf("Failed to parse multiaddr: %v", parseErr)
 							}
 							initHubAddrs = []multiaddr.Multiaddr{maddr}
 						} else {
@@ -207,22 +215,59 @@ func main() {
 				}
 
 				priv := getOrGenerateKey(store)
-				node, err = NewSamNode(context.Background(), priv, nil, initHubAddrs, store, meshFlag, discoveryIntervalFlag, listenAddrs, enableRelayFlag, nodeConfig, keyGracePeriodFlag)
+				enrollCtx, enrollCancel := context.WithCancel(context.Background())
+				node, err = NewSamNode(enrollCtx, priv, nil, initHubAddrs, store, meshFlag, discoveryIntervalFlag, listenAddrs, enableRelayFlag, nodeConfig, keyGracePeriodFlag)
 				if err != nil {
+					enrollCancel()
 					logger.Fatalf("Failed to initialize node for enrollment: %v", err)
 				}
 
-				err = node.Enroll(context.Background(), jwtStr)
+				err = node.Enroll(enrollCtx, jwtStr)
 				if err != nil {
+					if teardownErr := node.Teardown(); teardownErr != nil {
+						logger.Errorf("Teardown failed during enrollment error cleanup: %v", teardownErr)
+					}
+					enrollCancel()
 					logger.Fatalf("Enrollment failed: %v", err)
 				}
 
-				storedPubKey, _, _ = store.LoadHubConfig()
-				hubPubKey = storedPubKey
+				node.mu.Lock()
+				enrollKnownPeers := make(map[string]bool)
+				for k, v := range node.knownPeers {
+					enrollKnownPeers[k] = v
+				}
+				node.mu.Unlock()
 
-				node.keysMu.Lock()
-				node.trustedKeys = []TrustedKey{{Key: hubPubKey, ReceivedAt: time.Now()}}
-				node.keysMu.Unlock()
+				if teardownErr := node.Teardown(); teardownErr != nil {
+					logger.Errorf("Failed to teardown enrollment node: %v", teardownErr)
+				}
+				enrollCancel()
+
+				storedPubKey, storedAddrs, _ := store.LoadHubConfig()
+				hubPubKey = storedPubKey
+				var newHubAddrs []multiaddr.Multiaddr
+				for _, addrStr := range storedAddrs {
+					ma, err := multiaddr.NewMultiaddr(addrStr)
+					if err != nil {
+						logger.Warnf("Failed to parse stored hub address %q: %v", addrStr, err)
+						continue
+					}
+					newHubAddrs = append(newHubAddrs, ma)
+				}
+
+				node, err = NewSamNode(context.Background(), priv, hubPubKey, newHubAddrs, store, meshFlag, discoveryIntervalFlag, listenAddrs, enableRelayFlag, nodeConfig, keyGracePeriodFlag)
+				if err != nil {
+					logger.Fatalf("Failed to start mesh node after enrollment: %v", err)
+				}
+
+				node.mu.Lock()
+				for k, v := range enrollKnownPeers {
+					if node.Host != nil && k == node.Host.ID().String() {
+						continue
+					}
+					node.knownPeers[k] = v
+				}
+				node.mu.Unlock()
 			}
 
 			// Register static services from config
@@ -334,10 +379,14 @@ func main() {
 					if err == nil {
 						ip := net.ParseIP(host)
 						var maddr multiaddr.Multiaddr
+						var parseErr error
 						if ip != nil {
-							maddr, _ = multiaddr.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/%s", host, port))
+							maddr, parseErr = multiaddr.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/%s", host, port))
 						} else {
-							maddr, _ = multiaddr.NewMultiaddr(fmt.Sprintf("/dns4/%s/tcp/%s", host, port))
+							maddr, parseErr = multiaddr.NewMultiaddr(fmt.Sprintf("/dns4/%s/tcp/%s", host, port))
+						}
+						if parseErr != nil {
+							logger.Fatalf("Failed to parse multiaddr: %v", parseErr)
 						}
 						initHubAddrs = []multiaddr.Multiaddr{maddr}
 					} else {
@@ -347,7 +396,7 @@ func main() {
 			}
 
 			priv := getOrGenerateKey(store)
-			node, err := NewSamNode(context.Background(), priv, nil, initHubAddrs, store, meshFlag, discoveryIntervalFlag, listenAddrs, enableRelayFlag, nodeConfig, keyGracePeriodFlag)
+			node, err := NewSamNode(context.Background(), priv, nil, initHubAddrs, store, meshFlag, discoveryIntervalFlag, []string{"/ip4/0.0.0.0/udp/0/quic-v1", "/ip4/0.0.0.0/tcp/0"}, enableRelayFlag, nodeConfig, keyGracePeriodFlag)
 			if err != nil {
 				logger.Fatalf("Failed to initialize node for enrollment: %v", err)
 			}
@@ -518,6 +567,9 @@ func (n *SamNode) Enroll(ctx context.Context, jwt string) error {
 	// Add known peers from response
 	n.mu.Lock()
 	for _, p := range enrollResp.KnownPeers {
+		if n.Host != nil && p == n.Host.ID().String() {
+			continue
+		}
 		n.knownPeers[p] = true
 		fmt.Printf("[Enroll] Added known peer from hub: %s\n", p)
 	}
