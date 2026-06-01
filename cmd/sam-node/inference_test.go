@@ -69,6 +69,7 @@ func TestInferenceService_TokenAccountability_JSON(t *testing.T) {
 	}
 
 	req := httptest.NewRequest("POST", "http://localhost/chat", bytes.NewReader([]byte(`{"test":true}`)))
+	req.RemoteAddr = "127.0.0.1:1234"
 	req.Header.Set("X-Peer-Id", peerID)
 	w := httptest.NewRecorder()
 
@@ -133,6 +134,7 @@ func TestInferenceService_TokenAccountability_SSE(t *testing.T) {
 	}
 
 	req := httptest.NewRequest("POST", "http://localhost/chat", bytes.NewReader([]byte(`{"test":true}`)))
+	req.RemoteAddr = "127.0.0.1:1234"
 	req.Header.Set("X-Peer-Id", peerID)
 	w := httptest.NewRecorder()
 

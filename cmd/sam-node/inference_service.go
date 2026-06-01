@@ -48,7 +48,7 @@ func (s *InferenceService) Init(ctx context.Context) error {
 		s.backendURL = u
 		s.handler = s.newInferenceProxy()
 	case *api.RegisterServiceRequest_Command:
-		return s.baseService.Init(ctx)
+		return fmt.Errorf("command-based backends are not supported for InferenceService")
 	default:
 		return fmt.Errorf("unsupported backend type %T for InferenceService", s.backend)
 	}
@@ -76,6 +76,7 @@ type inferenceTransport struct {
 
 func (t *inferenceTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	attemptReq := req.Clone(req.Context())
+	attemptReq.Header.Del("Accept-Encoding") // Prevent gzipped response from breaking token tracking
 
 	attemptReq.URL.Scheme = t.backend.Scheme
 	attemptReq.URL.Host = t.backend.Host
@@ -94,7 +95,7 @@ func (t *inferenceTransport) RoundTrip(req *http.Request) (*http.Response, error
 
 	if resp.StatusCode == http.StatusOK {
 		peerID := getPeerID(req)
-		isSSE := resp.Header.Get("Content-Type") == "text/event-stream"
+		isSSE := strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream")
 		resp.Body = newInterceptingReader(resp.Body, peerID, isSSE)
 	}
 
@@ -123,10 +124,13 @@ func getPeerID(r *http.Request) string {
 			if _, err := peer.Decode(host); err == nil {
 				return host
 			}
+			// Only trust X-Peer-Id if request comes from local loopback / trusted localhost source
+			if host == "127.0.0.1" || host == "::1" || host == "localhost" {
+				if peerHeader := r.Header.Get("X-Peer-Id"); peerHeader != "" {
+					return peerHeader
+				}
+			}
 		}
-	}
-	if peerHeader := r.Header.Get("X-Peer-Id"); peerHeader != "" {
-		return peerHeader
 	}
 	return "unknown"
 }
@@ -184,20 +188,30 @@ func parseJSONResponse(r io.Reader, peerID string) {
 	if err := json.NewDecoder(r).Decode(&resp); err != nil {
 		return
 	}
-	if resp.Usage.PromptTokens > 0 || resp.Usage.CompletionTokens > 0 {
+	if resp.JSON.Usage.Valid() && (resp.Usage.PromptTokens > 0 || resp.Usage.CompletionTokens > 0) {
 		recordTokens(peerID, resp.Model, int(resp.Usage.PromptTokens), int(resp.Usage.CompletionTokens))
 	}
 }
 
 func parseSSEResponse(r io.Reader, peerID string) {
-	scanner := bufio.NewScanner(r)
+	reader := bufio.NewReader(r)
 	var model string
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil && err != io.EOF {
+			return
+		}
+		line = strings.TrimSpace(line)
 		if line == "" {
+			if err == io.EOF {
+				break
+			}
 			continue
 		}
 		if !strings.HasPrefix(line, "data:") {
+			if err == io.EOF {
+				break
+			}
 			continue
 		}
 		dataContent := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
@@ -210,10 +224,13 @@ func parseSSEResponse(r io.Reader, peerID string) {
 			if chunk.Model != "" {
 				model = chunk.Model
 			}
-			if chunk.Usage.PromptTokens > 0 || chunk.Usage.CompletionTokens > 0 {
+			if chunk.JSON.Usage.Valid() && (chunk.Usage.PromptTokens > 0 || chunk.Usage.CompletionTokens > 0) {
 				recordTokens(peerID, model, int(chunk.Usage.PromptTokens), int(chunk.Usage.CompletionTokens))
 				break
 			}
+		}
+		if err == io.EOF {
+			break
 		}
 	}
 }
