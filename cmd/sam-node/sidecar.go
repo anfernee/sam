@@ -277,6 +277,13 @@ func handleDiscoverService(node *SamNode, w http.ResponseWriter, r *http.Request
 	isStreaming := streamParam == "true" || acceptHeader == "text/event-stream"
 
 	if isStreaming {
+		out, err := node.DiscoverRemoteServicesStream(ctx, serviceType, serviceName)
+		if err != nil {
+			logger.Errorf("Failed to start streaming service discovery: %v", err)
+			http.Error(w, fmt.Sprintf("Failed to start streaming service discovery: %v", err), http.StatusInternalServerError)
+			return
+		}
+
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("Connection", "keep-alive")
@@ -284,16 +291,6 @@ func handleDiscoverService(node *SamNode, w http.ResponseWriter, r *http.Request
 		flusher, ok := w.(http.Flusher)
 		if !ok {
 			http.Error(w, "Streaming unsupported", http.StatusInternalServerError)
-			return
-		}
-
-		out, err := node.DiscoverRemoteServicesStream(ctx, serviceType, serviceName)
-		if err != nil {
-			logger.Errorf("Failed to start streaming service discovery: %v", err)
-			if _, err := fmt.Fprintf(w, "event: error\ndata: %s\n\n", err.Error()); err != nil {
-				logger.Errorf("Failed to write SSE error: %v", err)
-			}
-			flusher.Flush()
 			return
 		}
 
@@ -316,6 +313,7 @@ func handleDiscoverService(node *SamNode, w http.ResponseWriter, r *http.Request
 				}
 				if _, err := fmt.Fprintf(w, "data: %s\n\n", data); err != nil {
 					logger.Errorf("Failed to write SSE data: %v", err)
+					return
 				}
 				flusher.Flush()
 			}

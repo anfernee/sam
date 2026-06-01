@@ -749,13 +749,7 @@ func (n *SamNode) findProvidersByCID(ctx context.Context, c cid.Cid) ([]peer.Add
 	if n.DHT == nil {
 		return nil, fmt.Errorf("DHT not initialized")
 	}
-	timeout := dhtLookupTimeout
-	if deadline, ok := ctx.Deadline(); ok {
-		if remaining := time.Until(deadline); remaining > 0 {
-			timeout = remaining
-		}
-	}
-	lookupCtx, cancel := context.WithTimeout(ctx, timeout)
+	lookupCtx, cancel := context.WithTimeout(ctx, dhtLookupTimeout)
 	defer cancel()
 	// FindProvidersAsync can emit the same peer multiple times when the
 	// DHT walk converges from different paths; dedupe so downstream
@@ -850,13 +844,7 @@ func (n *SamNode) DiscoverRemoteServicesStream(ctx context.Context, serviceType 
 			return
 		}
 
-		timeout := discoveryFanoutTimeout
-		if deadline, ok := ctx.Deadline(); ok {
-			if remaining := time.Until(deadline); remaining > 0 {
-				timeout = remaining
-			}
-		}
-		fanoutCtx, cancel := context.WithTimeout(ctx, timeout)
+		fanoutCtx, cancel := context.WithTimeout(ctx, discoveryFanoutTimeout)
 		defer cancel()
 
 		var wg sync.WaitGroup
@@ -922,13 +910,7 @@ func (n *SamNode) discoverServicesByType(ctx context.Context, serviceType api.Se
 		return nil, err
 	}
 
-	timeout := discoveryFanoutTimeout
-	if deadline, ok := ctx.Deadline(); ok {
-		if remaining := time.Until(deadline); remaining > 0 {
-			timeout = remaining
-		}
-	}
-	fanoutCtx, cancel := context.WithTimeout(ctx, timeout)
+	fanoutCtx, cancel := context.WithTimeout(ctx, discoveryFanoutTimeout)
 	defer cancel()
 
 	type peerCatalog struct {
