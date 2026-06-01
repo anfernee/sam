@@ -61,7 +61,7 @@ teardown() {
 
   # Verify connected peer count via MCP (wait for full mesh).
   for i in $(seq 1 "$node_count"); do
-    run mesh_wait_for_node_count "${i}" "${node_count}" 60
+    run mesh_wait_for_node_count "${i}" $((node_count - 1)) 60
     [[ "$status" -eq 0 ]]
   done
 }

@@ -155,9 +155,6 @@ func NewSamNode(ctx context.Context, privKey crypto.PrivKey, hubPubKey ed25519.P
 	// If we have a Hub, configure it as our static fallback relay for NAT hole-punching
 	if len(staticRelays) > 0 {
 		opts = append(opts, libp2p.EnableAutoRelayWithStaticRelays(staticRelays))
-		if !enableRelay {
-			opts = append(opts, libp2p.ForceReachabilityPrivate())
-		}
 	}
 
 	// If the user explicitly opts in, allow this node to serve as a relay for others
