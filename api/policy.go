@@ -2,8 +2,14 @@ package api
 
 // PolicyConfig is the root authorization configuration for the SAM Hub.
 type PolicyConfig struct {
-	Version string                `yaml:"version"`
-	Roles   map[string]RolePolicy `yaml:"roles"`
+	Version  string                `yaml:"version"`
+	Bindings []Binding             `yaml:"bindings"`
+	Roles    map[string]RolePolicy `yaml:"roles"`
+}
+
+type Binding struct {
+	Group string `yaml:"group"`
+	Role  string `yaml:"role"`
 }
 
 type RolePolicy struct {

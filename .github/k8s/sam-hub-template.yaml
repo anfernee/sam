@@ -97,6 +97,7 @@ spec:
         - "--allowed-audiences=sam-mesh-audience,sam-hub-audience"
         - "--tls-cert-file=/etc/sam/certs/tls.crt"
         - "--tls-key-file=/etc/sam/certs/tls.key"
+        - "--policy-file=/etc/sam/policies/policies.yaml"
         resources:
           requests:
             cpu: 100m
@@ -108,10 +109,31 @@ spec:
         - name: tls-certs
           mountPath: /etc/sam/certs
           readOnly: true
+        - name: policies-volume
+          mountPath: /etc/sam/policies
+          readOnly: true
       volumes:
       - name: tls-certs
         secret:
           secretName: hub-sam-mesh-tls
+      - name: policies-volume
+        configMap:
+          name: sam-hub-policies-${ENV_NAME}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sam-hub-policies-${ENV_NAME}
+  namespace: ${NAMESPACE}
+data:
+  policies.yaml: |
+    version: "v1alpha1"
+    roles:
+      system:serviceaccounts:sam-canary-${ENV_NAME}:
+        mcp:
+          allowed_tools:
+            - "/sam/mcp/1.0.0"
+
 ---
 apiVersion: monitoring.googleapis.com/v1
 kind: PodMonitoring

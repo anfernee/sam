@@ -112,4 +112,52 @@ roles:
 	if err == nil {
 		t.Error("expected error for wildcard target, got nil")
 	}
+
+	// 6. Test valid bindings
+	bindingsYAML := `
+version: "v1alpha1"
+bindings:
+  - group: "system:serviceaccounts:sam-canary-bananas"
+    role: "mesh-member"
+roles:
+  mesh-member:
+    mcp:
+      allowed_tools: ["/sam/mcp/1.0.0"]
+`
+	bindingsFile := filepath.Join(dir, "bindings.yaml")
+	if err := os.WriteFile(bindingsFile, []byte(bindingsYAML), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	config, err = LoadPolicyConfig(bindingsFile)
+	if err != nil {
+		t.Fatalf("expected no error for valid bindings, got %v", err)
+	}
+	if len(config.Bindings) != 1 {
+		t.Errorf("expected 1 binding, got %d", len(config.Bindings))
+	}
+	if config.Bindings[0].Group != "system:serviceaccounts:sam-canary-bananas" || config.Bindings[0].Role != "mesh-member" {
+		t.Errorf("unexpected binding values: %+v", config.Bindings[0])
+	}
+
+	// 7. Test invalid binding mapping (non-existent role)
+	invalidBindingYAML := `
+version: "v1alpha1"
+bindings:
+  - group: "system:serviceaccounts:sam-canary-bananas"
+    role: "non-existent-role"
+roles:
+  mesh-member:
+    mcp:
+      allowed_tools: ["/sam/mcp/1.0.0"]
+`
+	invalidBindingFile := filepath.Join(dir, "invalid_binding.yaml")
+	if err := os.WriteFile(invalidBindingFile, []byte(invalidBindingYAML), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = LoadPolicyConfig(invalidBindingFile)
+	if err == nil {
+		t.Error("expected error for invalid binding referencing a nonexistent role, got nil")
+	}
 }

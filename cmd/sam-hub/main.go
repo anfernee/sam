@@ -411,11 +411,30 @@ func (h *Hub) parseAndVerifyJWT(ctx context.Context, jwtStr string, allowedAudie
 }
 
 func (h *Hub) mintBiscuitToken(claims jwt.MapClaims, token *oidc.IDToken, remotePeer peer.ID) ([]byte, error) {
-	var roles []string
+	var claimsGroups []string
 	if rolesAny, ok := claims["roles"].([]any); ok {
 		for _, r := range rolesAny {
 			if str, ok := r.(string); ok {
-				roles = append(roles, str)
+				claimsGroups = append(claimsGroups, str)
+			}
+		}
+	}
+	if groupsAny, ok := claims["groups"].([]any); ok {
+		for _, g := range groupsAny {
+			if str, ok := g.(string); ok {
+				claimsGroups = append(claimsGroups, str)
+			}
+		}
+	}
+
+	// Resolve roles based on configured group bindings (RBAC mapping)
+	resolvedRoles := make(map[string]bool)
+	if h.Policy != nil {
+		for _, b := range h.Policy.Bindings {
+			for _, cg := range claimsGroups {
+				if b.Group == cg {
+					resolvedRoles[b.Role] = true
+				}
 			}
 		}
 	}
@@ -443,7 +462,7 @@ func (h *Hub) mintBiscuitToken(claims jwt.MapClaims, token *oidc.IDToken, remote
 		return nil, fmt.Errorf("failed to add client_peer_id fact: %w", err)
 	}
 
-	for _, role := range roles {
+	for role := range resolvedRoles {
 		if err := builder.AddAuthorityFact(biscuit.Fact{Predicate: biscuit.Predicate{
 			Name: api.FactGroup,
 			IDs:  []biscuit.Term{biscuit.String(role)},

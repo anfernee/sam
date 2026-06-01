@@ -15,8 +15,9 @@ import (
 func LoadPolicyConfig(path string) (*api.PolicyConfig, error) {
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return &api.PolicyConfig{
-			Version: "v1alpha1",
-			Roles:   make(map[string]api.RolePolicy),
+			Version:  "v1alpha1",
+			Bindings: []api.Binding{},
+			Roles:    make(map[string]api.RolePolicy),
 		}, nil
 	}
 
@@ -47,8 +48,20 @@ func LoadPolicyConfig(path string) (*api.PolicyConfig, error) {
 	return &config, nil
 }
 
-// ValidatePolicyConfig ensures that no wildcards are used in policies.
+// ValidatePolicyConfig ensures that no wildcards are used in policies, and that all referenced roles in bindings exist.
 func ValidatePolicyConfig(config *api.PolicyConfig) error {
+	for _, b := range config.Bindings {
+		if b.Group == "" {
+			return fmt.Errorf("binding group cannot be empty")
+		}
+		if b.Role == "" {
+			return fmt.Errorf("binding role cannot be empty")
+		}
+		if _, exists := config.Roles[b.Role]; !exists {
+			return fmt.Errorf("binding role %q does not exist in defined roles", b.Role)
+		}
+	}
+
 	for role, rolePolicy := range config.Roles {
 		for _, target := range rolePolicy.Network.AllowedTargets {
 			if target == "*" {
