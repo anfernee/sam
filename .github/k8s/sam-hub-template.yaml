@@ -128,8 +128,11 @@ metadata:
 data:
   policies.yaml: |
     version: "v1alpha1"
+    bindings:
+      - group: "system:serviceaccounts:sam-canary-${ENV_NAME}"
+        role: "sam-canary"
     roles:
-      system:serviceaccounts:sam-canary-${ENV_NAME}:
+      sam-canary:
         mcp:
           allowed_tools:
             - "/sam/mcp/1.0.0"
