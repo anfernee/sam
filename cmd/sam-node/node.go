@@ -129,8 +129,11 @@ func NewSamNode(ctx context.Context, privKey crypto.PrivKey, hubPubKey ed25519.P
 	for _, addr := range hubAddrs {
 		if addrInfo, err := peer.AddrInfoFromP2pAddr(addr); err == nil && addrInfo.ID != "" {
 			staticRelays = append(staticRelays, *addrInfo)
+		} else {
+			logger.Warnf("Failed to parse static relay addr %s: %v", addr, err)
 		}
 	}
+	logger.Infof("Configured %d static relays: %v", len(staticRelays), staticRelays)
 
 	cm, err := connmgr.NewConnManager(100, 400, connmgr.WithGracePeriod(time.Minute))
 	if err != nil {
@@ -152,6 +155,9 @@ func NewSamNode(ctx context.Context, privKey crypto.PrivKey, hubPubKey ed25519.P
 	// If we have a Hub, configure it as our static fallback relay for NAT hole-punching
 	if len(staticRelays) > 0 {
 		opts = append(opts, libp2p.EnableAutoRelayWithStaticRelays(staticRelays))
+		if !enableRelay {
+			opts = append(opts, libp2p.ForceReachabilityPrivate())
+		}
 	}
 
 	// If the user explicitly opts in, allow this node to serve as a relay for others

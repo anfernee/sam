@@ -217,12 +217,20 @@ func main() {
 					logger.Fatalf("Enrollment failed: %v", err)
 				}
 
-				storedPubKey, _, _ = store.LoadHubConfig()
-				hubPubKey = storedPubKey
+				node.Host.Close()
 
-				node.keysMu.Lock()
-				node.trustedKeys = []TrustedKey{{Key: hubPubKey, ReceivedAt: time.Now()}}
-				node.keysMu.Unlock()
+				storedPubKey, storedAddrs, _ := store.LoadHubConfig()
+				hubPubKey = storedPubKey
+				var newHubAddrs []multiaddr.Multiaddr
+				for _, addrStr := range storedAddrs {
+					ma, _ := multiaddr.NewMultiaddr(addrStr)
+					newHubAddrs = append(newHubAddrs, ma)
+				}
+
+				node, err = NewSamNode(context.Background(), priv, hubPubKey, newHubAddrs, store, meshFlag, discoveryIntervalFlag, listenAddrs, enableRelayFlag, nodeConfig, keyGracePeriodFlag)
+				if err != nil {
+					logger.Fatalf("Failed to start mesh node after enrollment: %v", err)
+				}
 			}
 
 			// Register static services from config
@@ -347,7 +355,7 @@ func main() {
 			}
 
 			priv := getOrGenerateKey(store)
-			node, err := NewSamNode(context.Background(), priv, nil, initHubAddrs, store, meshFlag, discoveryIntervalFlag, listenAddrs, enableRelayFlag, nodeConfig, keyGracePeriodFlag)
+			node, err := NewSamNode(context.Background(), priv, nil, initHubAddrs, store, meshFlag, discoveryIntervalFlag, []string{"/ip4/0.0.0.0/udp/0/quic-v1", "/ip4/0.0.0.0/tcp/0"}, enableRelayFlag, nodeConfig, keyGracePeriodFlag)
 			if err != nil {
 				logger.Fatalf("Failed to initialize node for enrollment: %v", err)
 			}
