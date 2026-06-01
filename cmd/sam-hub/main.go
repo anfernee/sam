@@ -463,7 +463,12 @@ func (h *Hub) mintBiscuitToken(claims jwt.MapClaims, token *oidc.IDToken, remote
 	}
 
 	// Assert original OIDC groups in the token (semantic audit trail)
+	seenGroups := make(map[string]bool)
 	for _, cg := range claimsGroups {
+		if cg == "" || seenGroups[cg] {
+			continue
+		}
+		seenGroups[cg] = true
 		if err := builder.AddAuthorityFact(biscuit.Fact{Predicate: biscuit.Predicate{
 			Name: api.FactGroup,
 			IDs:  []biscuit.Term{biscuit.String(cg)},
