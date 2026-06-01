@@ -152,8 +152,11 @@ setup() {
 
   # Write policies to volume
   local hub_policy="version: \"v1alpha1\"
+bindings:
+  - group: \"data-scientist\"
+    role: \"mesh-member\"
 roles:
-  data-scientist:
+  mesh-member:
     mcp:
       allowed_tools:
         - \"query_database\"
