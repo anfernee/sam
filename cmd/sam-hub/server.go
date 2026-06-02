@@ -153,6 +153,8 @@ func handleRegisterHTTP(h *Hub) http.HandlerFunc {
 		}
 
 		h.gater.mu.Lock()
+		now := time.Now().Unix()
+		h.gater.lastUpdated[pID] = now
 		if !h.gater.authenticated[pID] {
 			samHubActiveNodes.Inc()
 		}
@@ -163,7 +165,7 @@ func handleRegisterHTTP(h *Hub) http.HandlerFunc {
 		h.publishSyncMessage(context.Background(), &api.HubSyncMessage{
 			Action:    api.HubSyncMessage_ADD,
 			PeerId:    pID.String(),
-			Timestamp: time.Now().Unix(),
+			Timestamp: now,
 		})
 
 		// NEW: Compile addresses of ALL Hub Replicas + Known Peers

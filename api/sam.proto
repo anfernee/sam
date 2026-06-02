@@ -108,4 +108,5 @@ message HubSyncMessage {
   repeated string peers = 3;
   repeated string hub_addrs = 4;
   int64 timestamp = 5;
+  map<string, int64> peer_timestamps = 6;
 }

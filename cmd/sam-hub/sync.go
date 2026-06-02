@@ -81,12 +81,13 @@ func (h *Hub) startSyncListener(ctx context.Context) {
 
 	// Message processor
 	go func() {
+		defer sub.Cancel()
 		for {
 			msg, err := sub.Next(ctx)
 			if err != nil {
 				return
 			}
-			if msg.ReceivedFrom == h.Host.ID() {
+			if msg.From == h.Host.ID() {
 				continue // Skip our own broadcast
 			}
 
@@ -103,22 +104,55 @@ func (h *Hub) startSyncListener(ctx context.Context) {
 			switch syncMsg.Action {
 			case api.HubSyncMessage_ADD:
 				p, err := peer.Decode(syncMsg.PeerId)
-				if err == nil && !h.gater.authenticated[p] {
-					samHubActiveNodes.Inc()
-					h.gater.authenticated[p] = true
+				if err == nil {
+					if syncMsg.Timestamp > h.gater.lastUpdated[p] {
+						h.gater.lastUpdated[p] = syncMsg.Timestamp
+						if !h.gater.authenticated[p] {
+							samHubActiveNodes.Inc()
+							h.gater.authenticated[p] = true
+						}
+					}
 				}
 			case api.HubSyncMessage_REMOVE:
 				p, err := peer.Decode(syncMsg.PeerId)
-				if err == nil && h.gater.authenticated[p] {
-					samHubActiveNodes.Dec()
-					delete(h.gater.authenticated, p)
+				if err == nil {
+					if syncMsg.Timestamp > h.gater.lastUpdated[p] {
+						h.gater.lastUpdated[p] = syncMsg.Timestamp
+						if h.gater.authenticated[p] {
+							samHubActiveNodes.Dec()
+							delete(h.gater.authenticated, p)
+						}
+					}
 				}
 			case api.HubSyncMessage_FULL_SYNC:
-				for _, pStr := range syncMsg.Peers {
+				for pStr, ts := range syncMsg.PeerTimestamps {
 					p, err := peer.Decode(pStr)
-					if err == nil && !h.gater.authenticated[p] {
-						samHubActiveNodes.Inc()
-						h.gater.authenticated[p] = true
+					if err != nil {
+						continue
+					}
+					if ts > h.gater.lastUpdated[p] {
+						h.gater.lastUpdated[p] = ts
+
+						// Determine if the peer is active in the incoming state
+						isActive := false
+						for _, activeStr := range syncMsg.Peers {
+							if activeStr == pStr {
+								isActive = true
+								break
+							}
+						}
+
+						if isActive {
+							if !h.gater.authenticated[p] {
+								samHubActiveNodes.Inc()
+								h.gater.authenticated[p] = true
+							}
+						} else {
+							if h.gater.authenticated[p] {
+								samHubActiveNodes.Dec()
+								delete(h.gater.authenticated, p)
+							}
+						}
 					}
 				}
 				if syncMsg.PeerId != "" && len(syncMsg.HubAddrs) > 0 {
@@ -156,14 +190,19 @@ func (h *Hub) publishFullSync(ctx context.Context) {
 	for p := range h.gater.authenticated {
 		peers = append(peers, p.String())
 	}
+	peerTimestamps := make(map[string]int64)
+	for p, ts := range h.gater.lastUpdated {
+		peerTimestamps[p.String()] = ts
+	}
 	h.gater.mu.RUnlock()
 
 	msg := api.HubSyncMessage{
-		Action:    api.HubSyncMessage_FULL_SYNC,
-		PeerId:    h.Host.ID().String(),
-		Peers:     peers,
-		HubAddrs:  h.getMyHubAddrs(),
-		Timestamp: time.Now().Unix(),
+		Action:         api.HubSyncMessage_FULL_SYNC,
+		PeerId:         h.Host.ID().String(),
+		Peers:          peers,
+		HubAddrs:       h.getMyHubAddrs(),
+		Timestamp:      time.Now().Unix(),
+		PeerTimestamps: peerTimestamps,
 	}
 	h.publishSyncMessage(ctx, &msg)
 }
@@ -179,7 +218,9 @@ func (h *Hub) publishSyncMessage(ctx context.Context, msg *api.HubSyncMessage) {
 		logger.Errorf("Failed to encrypt sync msg: %v", err)
 		return
 	}
-	_ = h.SyncTopic.Publish(ctx, ciphertext)
+	if err := h.SyncTopic.Publish(ctx, ciphertext); err != nil {
+		logger.Errorf("Failed to publish sync msg: %v", err)
+	}
 }
 
 func (h *Hub) getMyHubAddrs() []string {

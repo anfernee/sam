@@ -34,11 +34,13 @@ var _ connmgr.ConnectionGater = (*hubConnGate)(nil)
 type hubConnGate struct {
 	mu            sync.RWMutex
 	authenticated map[peer.ID]bool
+	lastUpdated   map[peer.ID]int64
 }
 
 func newHubConnGate() *hubConnGate {
 	return &hubConnGate{
 		authenticated: make(map[peer.ID]bool),
+		lastUpdated:   make(map[peer.ID]int64),
 	}
 }
 
@@ -70,6 +72,8 @@ func (n *notifier) Disconnected(_ network.Network, c network.Conn) {
 	p := c.RemotePeer()
 	n.hub.gater.mu.Lock()
 	wasAuth := n.hub.gater.authenticated[p]
+	now := time.Now().Unix()
+	n.hub.gater.lastUpdated[p] = now
 	delete(n.hub.gater.authenticated, p)
 	n.hub.gater.mu.Unlock()
 
@@ -82,7 +86,7 @@ func (n *notifier) Disconnected(_ network.Network, c network.Conn) {
 		n.hub.publishSyncMessage(context.Background(), &api.HubSyncMessage{
 			Action:    api.HubSyncMessage_REMOVE,
 			PeerId:    p.String(),
-			Timestamp: time.Now().Unix(),
+			Timestamp: now,
 		})
 
 		event := &api.MeshEvent{

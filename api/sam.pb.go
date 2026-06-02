@@ -830,14 +830,15 @@ func (x *HubInfoResponse) GetAudience() string {
 }
 
 type HubSyncMessage struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Action        HubSyncMessage_Action  `protobuf:"varint,1,opt,name=action,proto3,enum=sam.v1.HubSyncMessage_Action" json:"action,omitempty"`
-	PeerId        string                 `protobuf:"bytes,2,opt,name=peer_id,json=peerId,proto3" json:"peer_id,omitempty"`
-	Peers         []string               `protobuf:"bytes,3,rep,name=peers,proto3" json:"peers,omitempty"`
-	HubAddrs      []string               `protobuf:"bytes,4,rep,name=hub_addrs,json=hubAddrs,proto3" json:"hub_addrs,omitempty"`
-	Timestamp     int64                  `protobuf:"varint,5,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	Action         HubSyncMessage_Action  `protobuf:"varint,1,opt,name=action,proto3,enum=sam.v1.HubSyncMessage_Action" json:"action,omitempty"`
+	PeerId         string                 `protobuf:"bytes,2,opt,name=peer_id,json=peerId,proto3" json:"peer_id,omitempty"`
+	Peers          []string               `protobuf:"bytes,3,rep,name=peers,proto3" json:"peers,omitempty"`
+	HubAddrs       []string               `protobuf:"bytes,4,rep,name=hub_addrs,json=hubAddrs,proto3" json:"hub_addrs,omitempty"`
+	Timestamp      int64                  `protobuf:"varint,5,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
+	PeerTimestamps map[string]int64       `protobuf:"bytes,6,rep,name=peer_timestamps,json=peerTimestamps,proto3" json:"peer_timestamps,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"varint,2,opt,name=value"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *HubSyncMessage) Reset() {
@@ -905,6 +906,13 @@ func (x *HubSyncMessage) GetTimestamp() int64 {
 	return 0
 }
 
+func (x *HubSyncMessage) GetPeerTimestamps() map[string]int64 {
+	if x != nil {
+		return x.PeerTimestamps
+	}
+	return nil
+}
+
 var File_api_sam_proto protoreflect.FileDescriptor
 
 const file_api_sam_proto_rawDesc = "" +
@@ -965,13 +973,17 @@ const file_api_sam_proto_rawDesc = "" +
 	"\voidc_issuer\x18\x01 \x01(\tR\n" +
 	"oidcIssuer\x12\x1b\n" +
 	"\tclient_id\x18\x02 \x01(\tR\bclientId\x12\x1a\n" +
-	"\baudience\x18\x03 \x01(\tR\baudience\"\xf7\x01\n" +
+	"\baudience\x18\x03 \x01(\tR\baudience\"\x8f\x03\n" +
 	"\x0eHubSyncMessage\x125\n" +
 	"\x06action\x18\x01 \x01(\x0e2\x1d.sam.v1.HubSyncMessage.ActionR\x06action\x12\x17\n" +
 	"\apeer_id\x18\x02 \x01(\tR\x06peerId\x12\x14\n" +
 	"\x05peers\x18\x03 \x03(\tR\x05peers\x12\x1b\n" +
 	"\thub_addrs\x18\x04 \x03(\tR\bhubAddrs\x12\x1c\n" +
-	"\ttimestamp\x18\x05 \x01(\x03R\ttimestamp\"D\n" +
+	"\ttimestamp\x18\x05 \x01(\x03R\ttimestamp\x12S\n" +
+	"\x0fpeer_timestamps\x18\x06 \x03(\v2*.sam.v1.HubSyncMessage.PeerTimestampsEntryR\x0epeerTimestamps\x1aA\n" +
+	"\x13PeerTimestampsEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\x03R\x05value:\x028\x01\"D\n" +
 	"\x06Action\x12\x16\n" +
 	"\x12ACTION_UNSPECIFIED\x10\x00\x12\a\n" +
 	"\x03ADD\x10\x01\x12\n" +
@@ -997,7 +1009,7 @@ func file_api_sam_proto_rawDescGZIP() []byte {
 }
 
 var file_api_sam_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_api_sam_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
+var file_api_sam_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
 var file_api_sam_proto_goTypes = []any{
 	(ServiceType)(0),               // 0: sam.v1.ServiceType
 	(MeshEvent_Type)(0),            // 1: sam.v1.MeshEvent.Type
@@ -1014,6 +1026,7 @@ var file_api_sam_proto_goTypes = []any{
 	(*HubInfoResponse)(nil),        // 12: sam.v1.HubInfoResponse
 	(*HubSyncMessage)(nil),         // 13: sam.v1.HubSyncMessage
 	nil,                            // 14: sam.v1.CommandBackend.EnvEntry
+	nil,                            // 15: sam.v1.HubSyncMessage.PeerTimestampsEntry
 }
 var file_api_sam_proto_depIdxs = []int32{
 	1,  // 0: sam.v1.MeshEvent.type:type_name -> sam.v1.MeshEvent.Type
@@ -1022,11 +1035,12 @@ var file_api_sam_proto_depIdxs = []int32{
 	8,  // 3: sam.v1.RegisterServiceRequest.service:type_name -> sam.v1.ServiceInfo
 	9,  // 4: sam.v1.RegisterServiceRequest.command:type_name -> sam.v1.CommandBackend
 	2,  // 5: sam.v1.HubSyncMessage.action:type_name -> sam.v1.HubSyncMessage.Action
-	6,  // [6:6] is the sub-list for method output_type
-	6,  // [6:6] is the sub-list for method input_type
-	6,  // [6:6] is the sub-list for extension type_name
-	6,  // [6:6] is the sub-list for extension extendee
-	0,  // [0:6] is the sub-list for field type_name
+	15, // 6: sam.v1.HubSyncMessage.peer_timestamps:type_name -> sam.v1.HubSyncMessage.PeerTimestampsEntry
+	7,  // [7:7] is the sub-list for method output_type
+	7,  // [7:7] is the sub-list for method input_type
+	7,  // [7:7] is the sub-list for extension type_name
+	7,  // [7:7] is the sub-list for extension extendee
+	0,  // [0:7] is the sub-list for field type_name
 }
 
 func init() { file_api_sam_proto_init() }
@@ -1044,7 +1058,7 @@ func file_api_sam_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_api_sam_proto_rawDesc), len(file_api_sam_proto_rawDesc)),
 			NumEnums:      3,
-			NumMessages:   12,
+			NumMessages:   13,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
