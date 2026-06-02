@@ -303,7 +303,7 @@ func (h *Hub) handleAuthHandshake(s network.Stream) {
 
 	// Update active nodes gauge and gater state
 	h.gater.mu.Lock()
-	now := time.Now().Unix()
+	now := time.Now().UnixMilli()
 	h.gater.lastUpdated[remotePeer] = now
 	if !h.gater.authenticated[remotePeer] {
 		samHubActiveNodes.Inc()

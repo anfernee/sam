@@ -202,7 +202,7 @@ func (h *Hub) publishFullSync(ctx context.Context) {
 		PeerId:         h.Host.ID().String(),
 		Peers:          peers,
 		HubAddrs:       h.getMyHubAddrs(),
-		Timestamp:      time.Now().Unix(),
+		Timestamp:      time.Now().UnixMilli(),
 		PeerTimestamps: peerTimestamps,
 	}
 	h.publishSyncMessage(ctx, &msg)

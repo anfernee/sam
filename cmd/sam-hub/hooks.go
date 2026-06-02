@@ -72,7 +72,7 @@ func (n *notifier) Disconnected(_ network.Network, c network.Conn) {
 	p := c.RemotePeer()
 	n.hub.gater.mu.Lock()
 	wasAuth := n.hub.gater.authenticated[p]
-	now := time.Now().Unix()
+	now := time.Now().UnixMilli()
 	n.hub.gater.lastUpdated[p] = now
 	delete(n.hub.gater.authenticated, p)
 	n.hub.gater.mu.Unlock()

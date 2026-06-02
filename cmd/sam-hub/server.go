@@ -153,7 +153,7 @@ func handleRegisterHTTP(h *Hub) http.HandlerFunc {
 		}
 
 		h.gater.mu.Lock()
-		now := time.Now().Unix()
+		now := time.Now().UnixMilli()
 		h.gater.lastUpdated[pID] = now
 		if !h.gater.authenticated[pID] {
 			samHubActiveNodes.Inc()

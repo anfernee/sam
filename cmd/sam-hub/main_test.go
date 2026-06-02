@@ -340,7 +340,7 @@ func TestHubReplicaSynchronization(t *testing.T) {
 	hubA.publishSyncMessage(ctx, &api.HubSyncMessage{
 		Action:    api.HubSyncMessage_ADD,
 		PeerId:    peerC.String(),
-		Timestamp: time.Now().Unix(),
+		Timestamp: time.Now().UnixMilli(),
 	})
 
 	// 8. Verify Hub B receives the ADD and authenticates peerC
@@ -366,7 +366,7 @@ func TestHubReplicaSynchronization(t *testing.T) {
 	hubA.publishSyncMessage(ctx, &api.HubSyncMessage{
 		Action:    api.HubSyncMessage_REMOVE,
 		PeerId:    peerC.String(),
-		Timestamp: time.Now().Unix(),
+		Timestamp: time.Now().UnixMilli(),
 	})
 
 	// 10. Verify Hub B receives the REMOVE and removes peerC
