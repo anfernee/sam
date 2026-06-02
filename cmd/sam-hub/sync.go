@@ -126,6 +126,11 @@ func (h *Hub) startSyncListener(ctx context.Context) {
 					}
 				}
 			case api.HubSyncMessage_FULL_SYNC:
+				activePeers := make(map[string]bool)
+				for _, activeStr := range syncMsg.Peers {
+					activePeers[activeStr] = true
+				}
+
 				for pStr, ts := range syncMsg.PeerTimestamps {
 					p, err := peer.Decode(pStr)
 					if err != nil {
@@ -135,15 +140,7 @@ func (h *Hub) startSyncListener(ctx context.Context) {
 						h.gater.lastUpdated[p] = ts
 
 						// Determine if the peer is active in the incoming state
-						isActive := false
-						for _, activeStr := range syncMsg.Peers {
-							if activeStr == pStr {
-								isActive = true
-								break
-							}
-						}
-
-						if isActive {
+						if activePeers[pStr] {
 							if !h.gater.authenticated[p] {
 								samHubActiveNodes.Inc()
 								h.gater.authenticated[p] = true
@@ -160,6 +157,7 @@ func (h *Hub) startSyncListener(ctx context.Context) {
 					p, err := peer.Decode(syncMsg.PeerId)
 					if err == nil {
 						h.otherHubAddrs[p] = syncMsg.HubAddrs
+						h.otherHubLastSeen[p] = time.Now()
 					}
 				}
 			}
@@ -177,6 +175,7 @@ func (h *Hub) startSyncListener(ctx context.Context) {
 				return
 			case <-ticker.C:
 				h.publishFullSync(ctx)
+				h.pruneStaleData()
 			}
 		}
 	}()
@@ -243,4 +242,27 @@ func (h *Hub) getMyHubAddrs() []string {
 		}
 	}
 	return hubAddrs
+}
+
+func (h *Hub) pruneStaleData() {
+	h.gater.mu.Lock()
+	defer h.gater.mu.Unlock()
+	now := time.Now()
+	for p, lastSeen := range h.otherHubLastSeen {
+		if now.Sub(lastSeen) > 45*time.Second {
+			delete(h.otherHubAddrs, p)
+			delete(h.otherHubLastSeen, p)
+			logger.Infof("Pruned stale hub %s (last seen %s ago)", p.String(), now.Sub(lastSeen))
+		}
+	}
+
+	nowMilli := now.UnixMilli()
+	for p, ts := range h.gater.lastUpdated {
+		if !h.gater.authenticated[p] {
+			if nowMilli-ts > 3600*1000 { // 1 hour
+				delete(h.gater.lastUpdated, p)
+				logger.Debugf("Pruned transient peer %s from lastUpdated", p.String())
+			}
+		}
+	}
 }

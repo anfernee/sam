@@ -92,7 +92,7 @@ func (n *notifier) Disconnected(_ network.Network, c network.Conn) {
 		event := &api.MeshEvent{
 			Type:      api.MeshEvent_EXIT,
 			PeerId:    p.String(),
-			Timestamp: time.Now().Unix(),
+			Timestamp: time.Now().UnixMilli(),
 		}
 		// Sign event
 		if err := n.hub.signEvent(event); err != nil {

@@ -82,6 +82,7 @@ type SamNode struct {
 	Store             *Store
 	HubPeerID         peer.ID
 	knownPeers        map[string]bool
+	peerLastEventTime map[string]int64
 	receivedMsgs      map[string][]string
 	topics            map[string]*pubsub.Topic
 	mu                sync.Mutex
@@ -106,8 +107,9 @@ func NewSamNode(ctx context.Context, privKey crypto.PrivKey, hubPubKey ed25519.P
 	node := &SamNode{
 		Store:        store,
 		trustedKeys:  trustedKeys,
-		knownPeers:   make(map[string]bool),
-		receivedMsgs: make(map[string][]string),
+		knownPeers:        make(map[string]bool),
+		peerLastEventTime: make(map[string]int64),
+		receivedMsgs:      make(map[string][]string),
 		topics:       make(map[string]*pubsub.Topic),
 		LocalPolicy:   nodeConfig,
 		AllowLoopback: allowLoopback,
@@ -469,7 +471,7 @@ func (n *SamNode) listenForHubEvents(ctx context.Context) {
 		}
 
 		// Freshness check: reject events older than the threshold to prevent replay attacks
-		if time.Since(time.Unix(event.Timestamp, 0)) > FreshnessThreshold {
+		if time.Since(time.UnixMilli(event.Timestamp)) > FreshnessThreshold {
 			logger.Warnf("[Mesh Event] Dropping stale event from %s (timestamp: %d)", msg.ReceivedFrom, event.Timestamp)
 			continue
 		}
@@ -490,6 +492,15 @@ func (n *SamNode) listenForHubEvents(ctx context.Context) {
 func (n *SamNode) handleJoinEvent(event *api.MeshEvent) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
+	if n.peerLastEventTime == nil {
+		n.peerLastEventTime = make(map[string]int64)
+	}
+	if event.Timestamp < n.peerLastEventTime[event.PeerId] {
+		logger.Warnf("[Mesh Event] Dropping out-of-order JOIN event for peer %s (event timestamp: %d, last processed: %d)", event.PeerId, event.Timestamp, n.peerLastEventTime[event.PeerId])
+		return
+	}
+	n.peerLastEventTime[event.PeerId] = event.Timestamp
+
 	if n.Host == nil || event.PeerId != n.Host.ID().String() {
 		n.knownPeers[event.PeerId] = true
 	}
@@ -499,12 +510,31 @@ func (n *SamNode) handleJoinEvent(event *api.MeshEvent) {
 func (n *SamNode) handleExitEvent(event *api.MeshEvent) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
+	if n.peerLastEventTime == nil {
+		n.peerLastEventTime = make(map[string]int64)
+	}
+	if event.Timestamp < n.peerLastEventTime[event.PeerId] {
+		logger.Warnf("[Mesh Event] Dropping out-of-order EXIT event for peer %s (event timestamp: %d, last processed: %d)", event.PeerId, event.Timestamp, n.peerLastEventTime[event.PeerId])
+		return
+	}
+	n.peerLastEventTime[event.PeerId] = event.Timestamp
+
 	delete(n.knownPeers, event.PeerId)
 	logger.Infof("[Mesh Event] Peer left: %s", event.PeerId)
 }
 
 func (n *SamNode) handleBannedEvent(event *api.MeshEvent) {
 	n.mu.Lock()
+	if n.peerLastEventTime == nil {
+		n.peerLastEventTime = make(map[string]int64)
+	}
+	if event.Timestamp < n.peerLastEventTime[event.PeerId] {
+		logger.Warnf("[Mesh Event] Dropping out-of-order BANNED event for peer %s (event timestamp: %d, last processed: %d)", event.PeerId, event.Timestamp, n.peerLastEventTime[event.PeerId])
+		n.mu.Unlock()
+		return
+	}
+	n.peerLastEventTime[event.PeerId] = event.Timestamp
+
 	delete(n.knownPeers, event.PeerId)
 	n.mu.Unlock()
 

@@ -114,6 +114,7 @@ type Hub struct {
 	EventTopic       *pubsub.Topic
 	SyncTopic        *pubsub.Topic
 	otherHubAddrs    map[peer.ID][]string
+	otherHubLastSeen map[peer.ID]time.Time
 	gater            *hubConnGate
 	Policy           *api.PolicyConfig
 	limiter          *rate.Limiter
@@ -236,6 +237,7 @@ func NewHub(ctx context.Context, policy *api.PolicyConfig, allowLoopback bool) (
 		AllowedAudiences: auds,
 		AllowLoopback:    allowLoopback,
 		otherHubAddrs:    make(map[peer.ID][]string),
+		otherHubLastSeen: make(map[peer.ID]time.Time),
 	}
 
 	h.Network().Notify(&notifier{hub: hub})
@@ -322,7 +324,7 @@ func (h *Hub) handleAuthHandshake(s network.Stream) {
 	event := &api.MeshEvent{
 		Type:      api.MeshEvent_JOIN,
 		PeerId:    remotePeer.String(),
-		Timestamp: time.Now().Unix(),
+		Timestamp: time.Now().UnixMilli(),
 	}
 	if err := h.signEvent(event); err != nil {
 		logger.Errorw("Failed to sign mesh event", "peer_id", remotePeer, "error", err)
@@ -631,7 +633,7 @@ func (h *Hub) startRotation(ctx context.Context) {
 				// Broadcast event
 				event := &api.MeshEvent{
 					Type:         api.MeshEvent_KEY_ROTATION,
-					Timestamp:    time.Now().Unix(),
+					Timestamp:    time.Now().UnixMilli(),
 					NewPublicKey: newPub,
 				}
 
