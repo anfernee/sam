@@ -211,11 +211,31 @@ jobs:
           export CANARY_NAMESPACE="sam-canary-${ENV_NAME}"
           export IMAGE_TAG="${{ env.IMAGE_TAG }}"
           
+          # Idempotently provision the openclaw-secret if it doesn't already exist
+          if ! kubectl get secret openclaw-secret-${ENV_NAME} -n ${CANARY_NAMESPACE} >/dev/null 2>&1; then
+            echo "Generating a new random 16-byte hex key for OpenClaw Gateway Token..."
+            GATEWAY_TOKEN=$(openssl rand -hex 16)
+            kubectl create secret generic openclaw-secret-${ENV_NAME} \
+              --namespace=${CANARY_NAMESPACE} \
+              --from-literal=gateway-token="${GATEWAY_TOKEN}"
+          else
+            echo "openclaw-secret-${ENV_NAME} already exists in namespace ${CANARY_NAMESPACE}. Skipping generation."
+          fi
+
           envsubst < .github/k8s/sam-node-template.yaml | kubectl apply -f -
+          envsubst < .github/k8s/sam-node-openclaw-template.yaml | kubectl apply -f -
+
           
           kubectl rollout status deployment/sam-canary-${ENV_NAME} -n ${CANARY_NAMESPACE} --timeout=120s || {
             echo "Canary Deployment failed! Rolling back..."
             kubectl rollout undo deployment/sam-canary-${ENV_NAME} -n ${CANARY_NAMESPACE}
             kubectl rollout status deployment/sam-canary-${ENV_NAME} -n ${CANARY_NAMESPACE}
+            exit 1
+          }
+
+          kubectl rollout status deployment/openclaw-canary-${ENV_NAME} -n ${CANARY_NAMESPACE} --timeout=120s || {
+            echo "OpenClaw Canary Deployment failed! Rolling back..."
+            kubectl rollout undo deployment/openclaw-canary-${ENV_NAME} -n ${CANARY_NAMESPACE}
+            kubectl rollout status deployment/openclaw-canary-${ENV_NAME} -n ${CANARY_NAMESPACE}
             exit 1
           }
