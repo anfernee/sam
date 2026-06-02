@@ -259,7 +259,7 @@ func startMockHubDynamic(t *testing.T, pubA, pubB ed25519.PublicKey) (peer.ID, s
 	}
 
 	h.SetStreamHandler(api.AuthProtocolID, func(s network.Stream) {
-		defer s.Close()
+		defer func() { _ = s.Close() }()
 		reader := msgio.NewVarintReaderSize(s, 1024*64)
 		msg, err := reader.ReadMsg()
 		if err != nil {
