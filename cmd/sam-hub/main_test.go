@@ -15,6 +15,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"net/http"
@@ -383,6 +384,56 @@ func TestHubReplicaSynchronization(t *testing.T) {
 	}
 	if !removedOnB {
 		t.Fatal("Expected Hub B to de-authenticate peerC via sync REMOVE event, but it remained authenticated")
+	}
+
+	// 11. Trigger a key rotation on Hub A to change its keyring keypair
+	newPub, newPriv, _, err := hubA.KeyRing.PrepareRotation()
+	if err != nil {
+		t.Fatalf("failed to prepare rotation: %v", err)
+	}
+	if err := hubA.KeyRing.CommitRotation(newPub, newPriv, keyGracePeriod); err != nil {
+		t.Fatalf("failed to commit rotation: %v", err)
+	}
+
+	// Verify that Hub A's current key is indeed rotated and different from Hub B's
+	if bytes.Equal(hubA.KeyRing.GetCurrentKey(), hubB.KeyRing.GetCurrentKey()) {
+		t.Fatal("Expected Hub A's keyring key to be rotated and different from Hub B's")
+	}
+
+	// 12. Authenticate another dummy peer (peerD) on Hub A
+	privD, _, err := crypto.GenerateKeyPair(crypto.Ed25519, -1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	peerD, err := peer.IDFromPrivateKey(privD)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	hubA.gater.mu.Lock()
+	hubA.gater.authenticated[peerD] = true
+	hubA.gater.mu.Unlock()
+
+	// 13. Broadcast ADD event from Hub A (which now has a rotated KeyRing)
+	hubA.publishSyncMessage(ctx, &api.HubSyncMessage{
+		Action:    api.HubSyncMessage_ADD,
+		PeerId:    peerD.String(),
+		Timestamp: time.Now().UnixMilli(),
+	})
+
+	// 14. Verify Hub B can STILL decrypt and authenticate peerD
+	authedOnBAfterRotation := false
+	for i := 0; i < 100; i++ {
+		hubB.gater.mu.RLock()
+		authedOnBAfterRotation = hubB.gater.authenticated[peerD]
+		hubB.gater.mu.RUnlock()
+		if authedOnBAfterRotation {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if !authedOnBAfterRotation {
+		t.Fatal("Expected Hub B to successfully decrypt and authenticate peerD after Hub A's key rotation, but it failed")
 	}
 }
 
