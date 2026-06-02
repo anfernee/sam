@@ -34,7 +34,6 @@ metadata:
 spec:
   type: ClusterIP
   sessionAffinity: ClientIP
-  externalTrafficPolicy: Local
   ports:
     - port: 443
       targetPort: 9090
