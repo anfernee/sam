@@ -70,6 +70,7 @@ var (
 	configFile            string
 	keyGracePeriodFlag    time.Duration
 	dataDirFlag           string
+	allowLoopbackFlag     bool
 
 	apiTokenFlag string
 	tlsCertFlag  string
@@ -91,7 +92,6 @@ func main() {
 		Short: "Start the sovereign mesh node",
 		Run: func(cmd *cobra.Command, args []string) {
 			ctx := cmd.Context()
-
 			// Initialize logging
 			golog.SetAllLoggers(golog.LevelInfo)
 			if logLevelFlag != "" {
@@ -177,7 +177,7 @@ func main() {
 					logger.Fatal("Hub public key not found in store and not provided. Cannot verify peers.")
 				}
 				priv := getOrGenerateKey(store)
-				node, err = NewSamNode(context.Background(), priv, hubPubKey, hubAddrs, store, meshFlag, discoveryIntervalFlag, listenAddrs, enableRelayFlag, nodeConfig, keyGracePeriodFlag)
+				node, err = NewSamNode(context.Background(), priv, hubPubKey, hubAddrs, store, meshFlag, discoveryIntervalFlag, listenAddrs, enableRelayFlag, nodeConfig, keyGracePeriodFlag, allowLoopbackFlag)
 				if err != nil {
 					logger.Fatalf("Failed to start mesh node: %v", err)
 				}
@@ -216,7 +216,7 @@ func main() {
 
 				priv := getOrGenerateKey(store)
 				enrollCtx, enrollCancel := context.WithCancel(context.Background())
-				node, err = NewSamNode(enrollCtx, priv, nil, initHubAddrs, store, meshFlag, discoveryIntervalFlag, listenAddrs, enableRelayFlag, nodeConfig, keyGracePeriodFlag)
+				node, err = NewSamNode(enrollCtx, priv, nil, initHubAddrs, store, meshFlag, discoveryIntervalFlag, listenAddrs, enableRelayFlag, nodeConfig, keyGracePeriodFlag, allowLoopbackFlag)
 				if err != nil {
 					enrollCancel()
 					logger.Fatalf("Failed to initialize node for enrollment: %v", err)
@@ -255,7 +255,7 @@ func main() {
 					newHubAddrs = append(newHubAddrs, ma)
 				}
 
-				node, err = NewSamNode(context.Background(), priv, hubPubKey, newHubAddrs, store, meshFlag, discoveryIntervalFlag, listenAddrs, enableRelayFlag, nodeConfig, keyGracePeriodFlag)
+				node, err = NewSamNode(context.Background(), priv, hubPubKey, newHubAddrs, store, meshFlag, discoveryIntervalFlag, listenAddrs, enableRelayFlag, nodeConfig, keyGracePeriodFlag, allowLoopbackFlag)
 				if err != nil {
 					logger.Fatalf("Failed to start mesh node after enrollment: %v", err)
 				}
@@ -301,7 +301,6 @@ func main() {
 		Args:  cobra.MaximumNArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
 			ctx := cmd.Context()
-
 			targetHub := ""
 			if len(args) > 0 {
 				targetHub = args[0]
@@ -396,7 +395,7 @@ func main() {
 			}
 
 			priv := getOrGenerateKey(store)
-			node, err := NewSamNode(context.Background(), priv, nil, initHubAddrs, store, meshFlag, discoveryIntervalFlag, []string{"/ip4/0.0.0.0/udp/0/quic-v1", "/ip4/0.0.0.0/tcp/0"}, enableRelayFlag, nodeConfig, keyGracePeriodFlag)
+			node, err := NewSamNode(context.Background(), priv, nil, initHubAddrs, store, meshFlag, discoveryIntervalFlag, []string{"/ip4/0.0.0.0/udp/0/quic-v1", "/ip4/0.0.0.0/tcp/0"}, enableRelayFlag, nodeConfig, keyGracePeriodFlag, allowLoopbackFlag)
 			if err != nil {
 				logger.Fatalf("Failed to initialize node for enrollment: %v", err)
 			}
@@ -423,6 +422,8 @@ func main() {
 	runCmd.Flags().BoolVar(&enableRelayFlag, "enable-relay", false, "Allow this node to serve as a relay for others")
 	runCmd.Flags().StringVar(&logLevelFlag, "log-level", "info", "Log level (debug, info, warn, error)")
 	runCmd.Flags().DurationVar(&keyGracePeriodFlag, "key-grace-period", 24*time.Hour, "Key grace period for old keys (e.g. 24h)")
+	runCmd.Flags().BoolVar(&allowLoopbackFlag, "allow-loopback", false, "Allow publishing and connecting to loopback/link-local addresses")
+	joinCmd.Flags().BoolVar(&allowLoopbackFlag, "allow-loopback", false, "Allow publishing and connecting to loopback/link-local addresses")
 	runCmd.Flags().StringVar(&apiTokenFlag, "api-token", "", "Static Bearer token for API authorization")
 	runCmd.Flags().StringVar(&tlsCertFlag, "tls-cert", "", "Path to TLS certificate for sidecar API")
 	runCmd.Flags().StringVar(&tlsKeyFlag, "tls-key", "", "Path to TLS key for sidecar API")
