@@ -160,9 +160,9 @@ func handleRegisterHTTP(h *Hub) http.HandlerFunc {
 		h.gater.mu.Unlock()
 
 		// NEW: Propagate addition to other hubs
-		h.publishSyncMessage(context.Background(), HubSyncMessage{
-			Action:    "ADD",
-			PeerID:    pID.String(),
+		h.publishSyncMessage(context.Background(), &api.HubSyncMessage{
+			Action:    api.HubSyncMessage_ADD,
+			PeerId:    pID.String(),
 			Timestamp: time.Now().Unix(),
 		})
 

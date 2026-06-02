@@ -79,9 +79,9 @@ func (n *notifier) Disconnected(_ network.Network, c network.Conn) {
 		samHubActiveNodes.Dec() // Decrement active nodes
 
 		// Notify other hubs to clean up this peer
-		n.hub.publishSyncMessage(context.Background(), HubSyncMessage{
-			Action:    "REMOVE",
-			PeerID:    p.String(),
+		n.hub.publishSyncMessage(context.Background(), &api.HubSyncMessage{
+			Action:    api.HubSyncMessage_REMOVE,
+			PeerId:    p.String(),
 			Timestamp: time.Now().Unix(),
 		})
 

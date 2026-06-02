@@ -20,22 +20,15 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 	"crypto/sha256"
-	"encoding/json"
 	"fmt"
 	"io"
 	"strings"
 	"time"
 
+	"github.com/google/sam/api"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"google.golang.org/protobuf/proto"
 )
-
-type HubSyncMessage struct {
-	Action    string   `json:"action"` // ADD, REMOVE, FULL_SYNC
-	PeerID    string   `json:"peer_id,omitempty"`
-	Peers     []string `json:"peers,omitempty"`
-	HubAddrs  []string `json:"hub_addrs,omitempty"`
-	Timestamp int64    `json:"timestamp"`
-}
 
 func (h *Hub) encryptMsg(plaintext []byte) ([]byte, error) {
 	key := sha256.Sum256(h.KeyRing.GetCurrentKey())
@@ -101,26 +94,26 @@ func (h *Hub) startSyncListener(ctx context.Context) {
 			if err != nil {
 				continue // Invalid encryption/key, ignore
 			}
-			var syncMsg HubSyncMessage
-			if err := json.Unmarshal(plaintext, &syncMsg); err != nil {
+			var syncMsg api.HubSyncMessage
+			if err := proto.Unmarshal(plaintext, &syncMsg); err != nil {
 				continue
 			}
 
 			h.gater.mu.Lock()
 			switch syncMsg.Action {
-			case "ADD":
-				p, err := peer.Decode(syncMsg.PeerID)
+			case api.HubSyncMessage_ADD:
+				p, err := peer.Decode(syncMsg.PeerId)
 				if err == nil && !h.gater.authenticated[p] {
 					samHubActiveNodes.Inc()
 					h.gater.authenticated[p] = true
 				}
-			case "REMOVE":
-				p, err := peer.Decode(syncMsg.PeerID)
+			case api.HubSyncMessage_REMOVE:
+				p, err := peer.Decode(syncMsg.PeerId)
 				if err == nil && h.gater.authenticated[p] {
 					samHubActiveNodes.Dec()
 					delete(h.gater.authenticated, p)
 				}
-			case "FULL_SYNC":
+			case api.HubSyncMessage_FULL_SYNC:
 				for _, pStr := range syncMsg.Peers {
 					p, err := peer.Decode(pStr)
 					if err == nil && !h.gater.authenticated[p] {
@@ -128,8 +121,8 @@ func (h *Hub) startSyncListener(ctx context.Context) {
 						h.gater.authenticated[p] = true
 					}
 				}
-				if syncMsg.PeerID != "" && len(syncMsg.HubAddrs) > 0 {
-					p, err := peer.Decode(syncMsg.PeerID)
+				if syncMsg.PeerId != "" && len(syncMsg.HubAddrs) > 0 {
+					p, err := peer.Decode(syncMsg.PeerId)
 					if err == nil {
 						h.otherHubAddrs[p] = syncMsg.HubAddrs
 					}
@@ -165,18 +158,22 @@ func (h *Hub) publishFullSync(ctx context.Context) {
 	}
 	h.gater.mu.RUnlock()
 
-	msg := HubSyncMessage{
-		Action:    "FULL_SYNC",
-		PeerID:    h.Host.ID().String(),
+	msg := api.HubSyncMessage{
+		Action:    api.HubSyncMessage_FULL_SYNC,
+		PeerId:    h.Host.ID().String(),
 		Peers:     peers,
 		HubAddrs:  h.getMyHubAddrs(),
 		Timestamp: time.Now().Unix(),
 	}
-	h.publishSyncMessage(ctx, msg)
+	h.publishSyncMessage(ctx, &msg)
 }
 
-func (h *Hub) publishSyncMessage(ctx context.Context, msg HubSyncMessage) {
-	data, _ := json.Marshal(msg)
+func (h *Hub) publishSyncMessage(ctx context.Context, msg *api.HubSyncMessage) {
+	data, err := proto.Marshal(msg)
+	if err != nil {
+		logger.Errorf("Failed to marshal sync msg: %v", err)
+		return
+	}
 	ciphertext, err := h.encryptMsg(data)
 	if err != nil {
 		logger.Errorf("Failed to encrypt sync msg: %v", err)

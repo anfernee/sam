@@ -337,9 +337,9 @@ func TestHubReplicaSynchronization(t *testing.T) {
 	hubA.gater.mu.Unlock()
 
 	// 7. Broadcast ADD event from Hub A
-	hubA.publishSyncMessage(ctx, HubSyncMessage{
-		Action:    "ADD",
-		PeerID:    peerC.String(),
+	hubA.publishSyncMessage(ctx, &api.HubSyncMessage{
+		Action:    api.HubSyncMessage_ADD,
+		PeerId:    peerC.String(),
 		Timestamp: time.Now().Unix(),
 	})
 
@@ -363,9 +363,9 @@ func TestHubReplicaSynchronization(t *testing.T) {
 	delete(hubA.gater.authenticated, peerC)
 	hubA.gater.mu.Unlock()
 
-	hubA.publishSyncMessage(ctx, HubSyncMessage{
-		Action:    "REMOVE",
-		PeerID:    peerC.String(),
+	hubA.publishSyncMessage(ctx, &api.HubSyncMessage{
+		Action:    api.HubSyncMessage_REMOVE,
+		PeerId:    peerC.String(),
 		Timestamp: time.Now().Unix(),
 	})
 

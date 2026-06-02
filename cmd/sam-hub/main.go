@@ -309,10 +309,10 @@ func (h *Hub) handleAuthHandshake(s network.Stream) {
 	h.gater.authenticated[remotePeer] = true
 	h.gater.mu.Unlock()
 
-	// NEW: Notify other hubs of this peer
-	h.publishSyncMessage(context.Background(), HubSyncMessage{
-		Action:    "ADD",
-		PeerID:    remotePeer.String(),
+	// Notify other hubs of this peer
+	h.publishSyncMessage(context.Background(), &api.HubSyncMessage{
+		Action:    api.HubSyncMessage_ADD,
+		PeerId:    remotePeer.String(),
 		Timestamp: time.Now().Unix(),
 	})
 
