@@ -163,22 +163,13 @@ jobs:
           export NAMESPACE="sam-${ENV_NAME}"
           # Idempotently provision the sam-hub-secret if it doesn't already exist
           if ! kubectl get secret sam-hub-secret -n ${NAMESPACE} >/dev/null 2>&1; then
-            echo "Generating a new random 32-byte hex key for SAM_HUB_KEY and SAM_LIBP2P_KEY..."
+            echo "Generating a new random 32-byte hex key for SAM_HUB_KEY..."
             HUB_KEY=$(openssl rand -hex 32)
-            LIBP2P_KEY=$(openssl rand -hex 32)
             kubectl create secret generic sam-hub-secret \
               --namespace=${NAMESPACE} \
-              --from-literal=sam-hub-key="${HUB_KEY}" \
-              --from-literal=sam-libp2p-key="${LIBP2P_KEY}"
+              --from-literal=sam-hub-key="${HUB_KEY}"
           else
-            echo "sam-hub-secret already exists in namespace ${NAMESPACE}."
-            # Check if sam-libp2p-key is missing, and patch it if needed
-            if ! kubectl get secret sam-hub-secret -n ${NAMESPACE} -o json | grep -q '"sam-libp2p-key"'; then
-              echo "sam-libp2p-key is missing from existing secret. Generating and patching..."
-              LIBP2P_KEY=$(openssl rand -hex 32)
-              LIBP2P_KEY_BASE64=$(echo -n "${LIBP2P_KEY}" | base64 | tr -d '\n')
-              kubectl patch secret sam-hub-secret -n ${NAMESPACE} --type='json' -p="[{\"op\": \"add\", \"path\": \"/data/sam-libp2p-key\", \"value\": \"${LIBP2P_KEY_BASE64}\"}]"
-            fi
+            echo "sam-hub-secret already exists in namespace ${NAMESPACE}. Skipping generation."
           fi
 
       - name: Copy Wildcard TLS Secret to sam-hub

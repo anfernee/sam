@@ -36,7 +36,6 @@ import (
 	"github.com/libp2p/go-libp2p"
 	dht "github.com/libp2p/go-libp2p-kad-dht"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
-	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -97,7 +96,6 @@ var (
 	tlsCAFile             string
 	externalMultiaddrs    []string
 	allowedAudiencesFlag  string
-	libp2pKeyHex          string
 )
 
 var logger = golog.Logger("sam-hub")
@@ -128,8 +126,7 @@ func NewHub(ctx context.Context, policy *api.PolicyConfig) (*Hub, error) {
 		return nil, fmt.Errorf("failed to create connection manager: %w", err)
 	}
 
-	// Multi-transport setup for firewall traversal
-	opts := []libp2p.Option{
+	h, err := libp2p.New(
 		libp2p.Transport(libp2pquic.NewTransport),
 		libp2p.Transport(tcp.NewTCPTransport),
 		libp2p.ListenAddrStrings(listenAddrs...),
@@ -140,28 +137,7 @@ func NewHub(ctx context.Context, policy *api.PolicyConfig) (*Hub, error) {
 		libp2p.ConnectionManager(cm),
 		libp2p.EnableAutoNATv2(),
 		libp2p.EnableNATService(),
-	}
-
-	if libp2pKeyHex != "" {
-		logger.Infof("Initializing libp2p host with static PeerID...")
-		seed, err := hex.DecodeString(strings.TrimSpace(libp2pKeyHex))
-		if err != nil {
-			return nil, fmt.Errorf("failed to decode libp2p key hex: %w", err)
-		}
-		if len(seed) != ed25519.SeedSize {
-			return nil, fmt.Errorf("invalid libp2p key seed size: %d, expected %d", len(seed), ed25519.SeedSize)
-		}
-		priv := ed25519.NewKeyFromSeed(seed)
-		libp2pPrivKey, err := crypto.UnmarshalEd25519PrivateKey(priv)
-		if err != nil {
-			return nil, fmt.Errorf("failed to unmarshal libp2p private key: %w", err)
-		}
-		opts = append(opts, libp2p.Identity(libp2pPrivKey))
-	} else {
-		logger.Warnf("No libp2p key configured, using a dynamic ephemeral identity")
-	}
-
-	h, err := libp2p.New(opts...)
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -728,7 +704,6 @@ func main() {
 	rootCmd.Flags().StringVar(&oidcIssuer, "issuer", defIssuer, "OIDC Issuer URL")
 	rootCmd.Flags().StringVar(&clientID, "client-id", os.Getenv("SAM_OIDC_ID"), "OIDC Client ID")
 	rootCmd.Flags().StringVar(&biscuitHex, "key", os.Getenv("SAM_HUB_KEY"), "Hub Private Key (32-byte Hex)")
-	rootCmd.Flags().StringVar(&libp2pKeyHex, "libp2p-key", os.Getenv("SAM_LIBP2P_KEY"), "Hub libp2p Private Key (32-byte Hex)")
 	rootCmd.Flags().StringSliceVar(&listenAddrs, "listen", []string{"/ip4/0.0.0.0/udp/8080/quic-v1", "/ip4/0.0.0.0/tcp/8080"}, "libp2p Listen Addrs")
 	rootCmd.Flags().StringSliceVar(&externalMultiaddrs, "external-multiaddr", []string{}, "External multiaddrs to announce")
 	rootCmd.Flags().StringVar(&meshName, "mesh", DefaultMeshName, "Mesh federation name")
