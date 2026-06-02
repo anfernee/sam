@@ -31,6 +31,8 @@ import (
 	"github.com/libp2p/go-libp2p"
 	dht "github.com/libp2p/go-libp2p-kad-dht"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/libp2p/go-libp2p/core/network"
+	"github.com/libp2p/go-msgio"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -98,6 +100,21 @@ func startMockLibp2pHub(t *testing.T) (peer.ID, string) {
 		t.Fatalf("failed to create mock libp2p host: %v", err)
 	}
 
+	h.SetStreamHandler(api.AuthProtocolID, func(s network.Stream) {
+		defer func() { _ = s.Close() }()
+		reader := msgio.NewVarintReaderSize(s, 1024*64)
+		msg, err := reader.ReadMsg()
+		if err != nil {
+			return
+		}
+		defer reader.ReleaseMsg(msg)
+
+		writer := msgio.NewVarintWriter(s)
+		resp := &api.AuthResponse{Success: true}
+		respBytes, _ := proto.Marshal(resp)
+		_ = writer.WriteMsg(respBytes)
+	})
+
 	kdht, err := dht.New(context.Background(), h, dht.Mode(dht.ModeServer), dht.ProtocolPrefix("/sam"))
 	if err != nil {
 		t.Fatalf("failed to create DHT on mock hub: %v", err)
@@ -155,6 +172,21 @@ func startMockLibp2pHubWithOIDC(t *testing.T, oidcIssuerURL string) (peer.ID, st
 	if err != nil {
 		t.Fatalf("failed to create mock libp2p host: %v", err)
 	}
+
+	h.SetStreamHandler(api.AuthProtocolID, func(s network.Stream) {
+		defer func() { _ = s.Close() }()
+		reader := msgio.NewVarintReaderSize(s, 1024*64)
+		msg, err := reader.ReadMsg()
+		if err != nil {
+			return
+		}
+		defer reader.ReleaseMsg(msg)
+
+		writer := msgio.NewVarintWriter(s)
+		resp := &api.AuthResponse{Success: true}
+		respBytes, _ := proto.Marshal(resp)
+		_ = writer.WriteMsg(respBytes)
+	})
 
 	kdht, err := dht.New(context.Background(), h, dht.Mode(dht.ModeServer), dht.ProtocolPrefix("/sam"))
 	if err != nil {

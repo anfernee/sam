@@ -37,6 +37,7 @@ import (
 	dht "github.com/libp2p/go-libp2p-kad-dht"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-msgio"
 	"github.com/multiformats/go-multiaddr"
 	"google.golang.org/protobuf/proto"
@@ -256,6 +257,21 @@ func startMockHubDynamic(t *testing.T, pubA, pubB ed25519.PublicKey) (peer.ID, s
 	if err != nil {
 		t.Fatalf("failed to create mock libp2p host: %v", err)
 	}
+
+	h.SetStreamHandler(api.AuthProtocolID, func(s network.Stream) {
+		defer func() { _ = s.Close() }()
+		reader := msgio.NewVarintReaderSize(s, 1024*64)
+		msg, err := reader.ReadMsg()
+		if err != nil {
+			return
+		}
+		defer reader.ReleaseMsg(msg)
+
+		writer := msgio.NewVarintWriter(s)
+		resp := &api.AuthResponse{Success: true}
+		respBytes, _ := proto.Marshal(resp)
+		_ = writer.WriteMsg(respBytes)
+	})
 
 	kdht, err := dht.New(context.Background(), h, dht.Mode(dht.ModeServer), dht.ProtocolPrefix("/sam"))
 	if err != nil {
