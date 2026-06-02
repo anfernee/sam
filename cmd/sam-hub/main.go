@@ -21,6 +21,7 @@ import (
 	"crypto/x509"
 	"encoding/hex"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -44,6 +45,7 @@ import (
 	libp2ptls "github.com/libp2p/go-libp2p/p2p/security/tls"
 	libp2pquic "github.com/libp2p/go-libp2p/p2p/transport/quic"
 	"github.com/libp2p/go-msgio"
+	"github.com/multiformats/go-multiaddr"
 
 	"golang.org/x/time/rate"
 
@@ -96,7 +98,10 @@ var (
 	tlsCAFile             string
 	externalMultiaddrs    []string
 	allowedAudiencesFlag  string
+	allowLoopbackFlag     bool
 )
+
+var AllowLoopback bool
 
 var logger = golog.Logger("sam-hub")
 
@@ -137,6 +142,18 @@ func NewHub(ctx context.Context, policy *api.PolicyConfig) (*Hub, error) {
 		libp2p.ConnectionManager(cm),
 		libp2p.EnableAutoNATv2(),
 		libp2p.EnableNATService(),
+		libp2p.AddrsFactory(func(addrs []multiaddr.Multiaddr) []multiaddr.Multiaddr {
+			if AllowLoopback {
+				return addrs
+			}
+			var filtered []multiaddr.Multiaddr
+			for _, addr := range addrs {
+				if !isLoopbackOrLinkLocal(addr) {
+					filtered = append(filtered, addr)
+				}
+			}
+			return filtered
+		}),
 	)
 	if err != nil {
 		return nil, err
@@ -658,6 +675,7 @@ func main() {
 		Short: "Sovereign Agent Mesh - Multi-Transport Hub",
 		Run: func(cmd *cobra.Command, args []string) {
 			ctx := cmd.Context()
+			AllowLoopback = allowLoopbackFlag
 
 			// Initialize logging
 			if os.Getenv("LOG_FORMAT") == "json" {
@@ -719,6 +737,7 @@ func main() {
 	rootCmd.PersistentFlags().StringVar(&tlsCertFile, "tls-cert-file", "", "Path to TLS certificate for the server")
 	rootCmd.PersistentFlags().StringVar(&tlsKeyFile, "tls-key-file", "", "Path to TLS private key for the server")
 	rootCmd.PersistentFlags().StringVar(&tlsCAFile, "tls-ca-file", "", "Path to CA certificate to verify client certificates (enables mTLS)")
+	rootCmd.Flags().BoolVar(&allowLoopbackFlag, "allow-loopback", false, "Allow publishing and connecting to loopback/link-local addresses")
 
 	var peerToBan string
 	var banReason string
@@ -802,4 +821,21 @@ func main() {
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
 	}
+}
+
+func isLoopbackOrLinkLocal(addr multiaddr.Multiaddr) bool {
+	for _, proto := range addr.Protocols() {
+		if proto.Code == multiaddr.P_IP4 || proto.Code == multiaddr.P_IP6 {
+			value, err := addr.ValueForProtocol(proto.Code)
+			if err == nil {
+				ip := net.ParseIP(value)
+				if ip != nil {
+					if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+						return true
+					}
+				}
+			}
+		}
+	}
+	return false
 }

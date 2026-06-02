@@ -70,6 +70,7 @@ var (
 	configFile            string
 	keyGracePeriodFlag    time.Duration
 	dataDirFlag           string
+	allowLoopbackFlag     bool
 
 	apiTokenFlag string
 	tlsCertFlag  string
@@ -91,6 +92,7 @@ func main() {
 		Short: "Start the sovereign mesh node",
 		Run: func(cmd *cobra.Command, args []string) {
 			ctx := cmd.Context()
+			AllowLoopback = allowLoopbackFlag
 
 			// Initialize logging
 			golog.SetAllLoggers(golog.LevelInfo)
@@ -301,6 +303,7 @@ func main() {
 		Args:  cobra.MaximumNArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
 			ctx := cmd.Context()
+			AllowLoopback = allowLoopbackFlag
 
 			targetHub := ""
 			if len(args) > 0 {
@@ -423,6 +426,8 @@ func main() {
 	runCmd.Flags().BoolVar(&enableRelayFlag, "enable-relay", false, "Allow this node to serve as a relay for others")
 	runCmd.Flags().StringVar(&logLevelFlag, "log-level", "info", "Log level (debug, info, warn, error)")
 	runCmd.Flags().DurationVar(&keyGracePeriodFlag, "key-grace-period", 24*time.Hour, "Key grace period for old keys (e.g. 24h)")
+	runCmd.Flags().BoolVar(&allowLoopbackFlag, "allow-loopback", false, "Allow publishing and connecting to loopback/link-local addresses")
+	joinCmd.Flags().BoolVar(&allowLoopbackFlag, "allow-loopback", false, "Allow publishing and connecting to loopback/link-local addresses")
 	runCmd.Flags().StringVar(&apiTokenFlag, "api-token", "", "Static Bearer token for API authorization")
 	runCmd.Flags().StringVar(&tlsCertFlag, "tls-cert", "", "Path to TLS certificate for sidecar API")
 	runCmd.Flags().StringVar(&tlsKeyFlag, "tls-key", "", "Path to TLS key for sidecar API")

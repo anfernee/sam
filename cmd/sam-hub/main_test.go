@@ -260,3 +260,8 @@ func TestHandleInfoHTTP(t *testing.T) {
 		t.Errorf("Expected audience 'test-audience-1', got %q", info.Audience)
 	}
 }
+
+func init() {
+	AllowLoopback = true
+}
+

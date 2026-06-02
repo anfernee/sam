@@ -21,6 +21,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -71,6 +72,8 @@ type TrustedKey struct {
 	Key        ed25519.PublicKey
 	ReceivedAt time.Time
 }
+
+var AllowLoopback bool
 
 type SamNode struct {
 	Host              host.Host
@@ -152,6 +155,18 @@ func NewSamNode(ctx context.Context, privKey crypto.PrivKey, hubPubKey ed25519.P
 		libp2p.ListenAddrStrings(listenAddrs...),
 		libp2p.EnableNATService(),
 		libp2p.ConnectionManager(cm),
+		libp2p.AddrsFactory(func(addrs []multiaddr.Multiaddr) []multiaddr.Multiaddr {
+			if AllowLoopback {
+				return addrs
+			}
+			var filtered []multiaddr.Multiaddr
+			for _, addr := range addrs {
+				if !isLoopbackOrLinkLocal(addr) {
+					filtered = append(filtered, addr)
+				}
+			}
+			return filtered
+		}),
 	}
 
 	// If we have a Hub, configure it as our static fallback relay for NAT hole-punching
@@ -1035,3 +1050,21 @@ func (n *SamNode) StartIngressServer(ctx context.Context) error {
 
 	return nil
 }
+
+func isLoopbackOrLinkLocal(addr multiaddr.Multiaddr) bool {
+	for _, proto := range addr.Protocols() {
+		if proto.Code == multiaddr.P_IP4 || proto.Code == multiaddr.P_IP6 {
+			value, err := addr.ValueForProtocol(proto.Code)
+			if err == nil {
+				ip := net.ParseIP(value)
+				if ip != nil {
+					if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+						return true
+					}
+				}
+			}
+		}
+	}
+	return false
+}
+
