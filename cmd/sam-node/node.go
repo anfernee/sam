@@ -65,6 +65,8 @@ const (
 	KeyPruningInterval = 1 * time.Hour
 )
 
+var ErrFatalAuth = errors.New("fatal authentication error")
+
 type TrustedKey struct {
 	Key        ed25519.PublicKey
 	ReceivedAt time.Time
@@ -183,13 +185,27 @@ func NewSamNode(ctx context.Context, privKey crypto.PrivKey, hubPubKey ed25519.P
 	node.services = NewServiceRegistry(node.DHT)
 
 	// Bootstrap: Connect and Auth to the Hub
+	var authenticated bool
+	var fatalAuthErr error
+
 	for _, addr := range hubAddrs {
 		if err := node.ConnectAndAuthWithHub(ctx, addr); err != nil {
 			logger.Warnf("[AuthN] Failed to bootstrap and auth with hub %s: %v", addr, err)
+			if errors.Is(err, ErrFatalAuth) {
+				fatalAuthErr = err
+			}
 		} else {
+			authenticated = true
 			break
 		}
 	}
+
+	if len(hubAddrs) > 0 && !authenticated {
+		if fatalAuthErr != nil {
+			return nil, fmt.Errorf("fatal auth failure: %w", fatalAuthErr)
+		}
+	}
+
 
 	// Initialize Gossipsub for Hub Events
 	ps, err := pubsub.NewGossipSub(ctx, h)
@@ -276,6 +292,9 @@ func (n *SamNode) ConnectAndAuthWithHub(ctx context.Context, addr multiaddr.Mult
 	}
 
 	if err := n.Host.Connect(ctx, *addrInfo); err != nil {
+		if strings.Contains(err.Error(), "peer id mismatch") {
+			return fmt.Errorf("%w: %w", ErrFatalAuth, err)
+		}
 		return fmt.Errorf("failed to connect to hub %s: %w", addr, err)
 	}
 
@@ -285,16 +304,16 @@ func (n *SamNode) ConnectAndAuthWithHub(ctx context.Context, addr multiaddr.Mult
 	// Load biscuit from store
 	biscuitBytes, err := n.Store.LoadIdentity()
 	if err != nil {
-		return fmt.Errorf("failed to load identity from store: %w", err)
+		return fmt.Errorf("%w: failed to load identity from store: %w", ErrFatalAuth, err)
 	}
 	if len(biscuitBytes) == 0 {
-		return fmt.Errorf("no identity biscuit found in store")
+		return fmt.Errorf("%w: no identity biscuit found in store", ErrFatalAuth)
 	}
 
 	// Open auth stream
 	s, err := n.Host.NewStream(ctx, addrInfo.ID, api.AuthProtocolID)
 	if err != nil {
-		return fmt.Errorf("failed to open auth stream to hub: %w", err)
+		return fmt.Errorf("%w: failed to open auth stream to hub: %w", ErrFatalAuth, err)
 	}
 	defer func() {
 		if err := s.Close(); err != nil {
@@ -325,7 +344,7 @@ func (n *SamNode) ConnectAndAuthWithHub(ctx context.Context, addr multiaddr.Mult
 	}
 
 	if !resp.Success {
-		return fmt.Errorf("auth failed: %s", resp.Error)
+		return fmt.Errorf("%w: auth failed: %s", ErrFatalAuth, resp.Error)
 	}
 
 	logger.Infof("[AuthN] Successfully authenticated with hub via libp2p")
