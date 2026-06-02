@@ -313,7 +313,7 @@ func (n *SamNode) ConnectAndAuthWithHub(ctx context.Context, addr multiaddr.Mult
 	// Open auth stream
 	s, err := n.Host.NewStream(ctx, addrInfo.ID, api.AuthProtocolID)
 	if err != nil {
-		return fmt.Errorf("%w: failed to open auth stream to hub: %w", ErrFatalAuth, err)
+		return fmt.Errorf("failed to open auth stream to hub: %w", err)
 	}
 	defer func() {
 		if err := s.Close(); err != nil {

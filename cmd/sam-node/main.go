@@ -133,7 +133,7 @@ func main() {
 			}
 
 			if hubPublicKeyFlag != "" {
-				pubBytes, err := hex.DecodeString(hubPublicKeyFlag)
+				pubBytes, err := hex.DecodeString(strings.TrimSpace(hubPublicKeyFlag))
 				if err != nil {
 					logger.Fatalf("Invalid hub public key: %v", err)
 				}

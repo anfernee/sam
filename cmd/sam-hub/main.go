@@ -144,7 +144,7 @@ func NewHub(ctx context.Context, policy *api.PolicyConfig) (*Hub, error) {
 
 	if libp2pKeyHex != "" {
 		logger.Infof("Initializing libp2p host with static PeerID...")
-		seed, err := hex.DecodeString(libp2pKeyHex)
+		seed, err := hex.DecodeString(strings.TrimSpace(libp2pKeyHex))
 		if err != nil {
 			return nil, fmt.Errorf("failed to decode libp2p key hex: %w", err)
 		}
@@ -208,7 +208,7 @@ func NewHub(ctx context.Context, policy *api.PolicyConfig) (*Hub, error) {
 	var initialSeed []byte
 	if biscuitHex != "" {
 		var err error
-		initialSeed, err = hex.DecodeString(biscuitHex)
+		initialSeed, err = hex.DecodeString(strings.TrimSpace(biscuitHex))
 		if err != nil {
 			return nil, fmt.Errorf("failed to decode key flag: %w", err)
 		}

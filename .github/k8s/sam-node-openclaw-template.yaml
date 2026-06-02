@@ -35,14 +35,14 @@ spec:
       serviceAccountName: sam-node-sa
       initContainers:
       - name: init-openclaw-config
-        image: busybox:latest
+        image: busybox:1.36.1
         command: ["sh", "-c", "mkdir -p /data && echo '{\"gateway\": {\"mode\": \"local\"}}' > /data/openclaw.json"]
         volumeMounts:
         - name: openclaw-data
           mountPath: /data
       containers:
       - name: openclaw
-        image: ghcr.io/openclaw/openclaw:latest
+        image: ghcr.io/openclaw/openclaw:2026.4.9
         ports:
         - containerPort: 18789
           name: http-gateway
