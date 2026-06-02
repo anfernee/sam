@@ -6,6 +6,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/json"
+	"fmt"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -460,5 +461,382 @@ func TestNewMCPHandler_RegistersFindRemoteTools(t *testing.T) {
 			names = append(names, tl.Name)
 		}
 		t.Errorf("find_remote_tools missing from sidecar tools/list; got %v", names)
+	}
+}
+
+func TestHandleDescribeLocalTool_HappyPath(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	tools := []*mcp.Tool{
+		{
+			Name:         "review_pr",
+			Description:  "Run a code review",
+			InputSchema:  map[string]any{"type": "object", "properties": map[string]any{"pr_url": map[string]any{"type": "string"}}, "required": []any{"pr_url"}},
+			OutputSchema: map[string]any{"type": "object", "properties": map[string]any{"summary": map[string]any{"type": "string"}}},
+		},
+	}
+	upstream := httptest.NewServer(newFakeMCPHandler(t, tools))
+	defer upstream.Close()
+
+	node, cleanup := startBareNode(t, ctx)
+	defer cleanup()
+
+	svc := &MCPService{baseService: baseService{
+		info:    &api.ServiceInfo{Type: api.ServiceType_SERVICE_TYPE_MCP, Name: "code-reviewer"},
+		backend: &api.RegisterServiceRequest_TargetUrl{TargetUrl: upstream.URL},
+	}}
+	if err := svc.Init(ctx); err != nil {
+		t.Fatalf("MCPService.Init: %v", err)
+	}
+	node.services.insertService(svc)
+	t.Cleanup(func() { _ = svc.Teardown() })
+
+	res, _, err := node.handleDescribeLocalTool(ctx, &mcp.CallToolRequest{}, DescribeLocalToolParams{
+		ToolName: "code-reviewer.review_pr",
+	})
+	if err != nil {
+		t.Fatalf("handleDescribeLocalTool: %v", err)
+	}
+	if len(res.Content) == 0 {
+		t.Fatal("expected non-empty Content")
+	}
+	tc, ok := res.Content[0].(*mcp.TextContent)
+	if !ok {
+		t.Fatalf("expected TextContent, got %T", res.Content[0])
+	}
+	var desc remoteToolDescription
+	if err := json.Unmarshal([]byte(tc.Text), &desc); err != nil {
+		t.Fatalf("response not JSON: %v (text: %q)", err, tc.Text)
+	}
+	if desc.ToolName != "code-reviewer.review_pr" {
+		t.Errorf("ToolName = %q, want %q", desc.ToolName, "code-reviewer.review_pr")
+	}
+	if desc.Description != "Run a code review" {
+		t.Errorf("Description = %q, want %q", desc.Description, "Run a code review")
+	}
+	if desc.InputSchema == nil {
+		t.Error("InputSchema is nil; expected the schema declared on the tool")
+	}
+	if desc.OutputSchema == nil {
+		t.Error("OutputSchema is nil; expected the schema declared on the tool")
+	}
+	if desc.PeerID != "" {
+		t.Errorf("PeerID should be empty on the peer-side payload, got %q", desc.PeerID)
+	}
+}
+
+func TestHandleDescribeLocalTool_NotFound(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	tools := []*mcp.Tool{
+		{Name: "review_pr", Description: "x", InputSchema: map[string]any{"type": "object"}},
+	}
+	upstream := httptest.NewServer(newFakeMCPHandler(t, tools))
+	defer upstream.Close()
+
+	node, cleanup := startBareNode(t, ctx)
+	defer cleanup()
+
+	svc := &MCPService{baseService: baseService{
+		info:    &api.ServiceInfo{Type: api.ServiceType_SERVICE_TYPE_MCP, Name: "code-reviewer"},
+		backend: &api.RegisterServiceRequest_TargetUrl{TargetUrl: upstream.URL},
+	}}
+	if err := svc.Init(ctx); err != nil {
+		t.Fatalf("MCPService.Init: %v", err)
+	}
+	node.services.insertService(svc)
+	t.Cleanup(func() { _ = svc.Teardown() })
+
+	_, _, err := node.handleDescribeLocalTool(ctx, &mcp.CallToolRequest{}, DescribeLocalToolParams{
+		ToolName: "code-reviewer.does-not-exist",
+	})
+	if err == nil {
+		t.Fatal("expected error for unknown tool")
+	}
+	if !strings.Contains(err.Error(), "tool not found") {
+		t.Errorf("error %q does not mention 'tool not found'", err.Error())
+	}
+}
+
+func TestHandleDescribeLocalTool_EmptyToolName(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	node, cleanup := startBareNode(t, ctx)
+	defer cleanup()
+
+	_, _, err := node.handleDescribeLocalTool(ctx, &mcp.CallToolRequest{}, DescribeLocalToolParams{})
+	if err == nil {
+		t.Fatal("expected error for empty tool_name")
+	}
+}
+
+func TestHandleDescribeRemoteTool_EmptyPeerID(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	node, cleanup := startBareNode(t, ctx)
+	defer cleanup()
+
+	_, _, err := node.handleDescribeRemoteTool(ctx, &mcp.CallToolRequest{}, DescribeRemoteToolParams{
+		ToolName: "code-reviewer.review_pr",
+	})
+	if err == nil {
+		t.Fatal("expected error for empty peer_id")
+	}
+}
+
+func TestHandleDescribeRemoteTool_EmptyToolName(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	node, cleanup := startBareNode(t, ctx)
+	defer cleanup()
+
+	_, _, err := node.handleDescribeRemoteTool(ctx, &mcp.CallToolRequest{}, DescribeRemoteToolParams{
+		PeerID: "12D3KooWFakePeerID",
+	})
+	if err == nil {
+		t.Fatal("expected error for empty tool_name")
+	}
+}
+
+func TestHandleDescribeRemoteTool_NonNamespacedRejected(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	node, cleanup := startBareNode(t, ctx)
+	defer cleanup()
+
+	_, _, err := node.handleDescribeRemoteTool(ctx, &mcp.CallToolRequest{}, DescribeRemoteToolParams{
+		PeerID:   "12D3KooWFakePeerID",
+		ToolName: "send_message", // no dot
+	})
+	if err == nil {
+		t.Fatal("expected error for tool_name without '.'")
+	}
+	if !strings.Contains(err.Error(), "namespaced") {
+		t.Errorf("error %q does not explain the namespacing requirement", err.Error())
+	}
+}
+
+func TestHandleDescribeRemoteTool_SelfPeerRejected(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	node, cleanup := startBareNode(t, ctx)
+	defer cleanup()
+
+	_, _, err := node.handleDescribeRemoteTool(ctx, &mcp.CallToolRequest{}, DescribeRemoteToolParams{
+		PeerID:   node.Host.ID().String(),
+		ToolName: "code-reviewer.review_pr",
+	})
+	if err == nil {
+		t.Fatal("expected error when peer_id equals self peer ID")
+	}
+}
+
+func TestHandleDescribeRemoteTool_InvalidPeerID(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	node, cleanup := startBareNode(t, ctx)
+	defer cleanup()
+
+	_, _, err := node.handleDescribeRemoteTool(ctx, &mcp.CallToolRequest{}, DescribeRemoteToolParams{
+		PeerID:   "not-a-valid-peer-id",
+		ToolName: "code-reviewer.review_pr",
+	})
+	if err == nil {
+		t.Fatal("expected error for malformed peer_id")
+	}
+}
+
+func TestHandleDescribeRemoteTool_RoundTrip(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	nodeA, cleanupA := startBareNode(t, ctx)
+	defer cleanupA()
+	nodeB, cleanupB := startBareNode(t, ctx)
+	defer cleanupB()
+
+	if err := nodeA.Host.Connect(ctx, peer.AddrInfo{ID: nodeB.Host.ID(), Addrs: nodeB.Host.Addrs()}); err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+
+	rootPub, rootPriv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("gen root key: %v", err)
+	}
+	if err := buildAndSaveBiscuit(nodeA, rootPriv); err != nil {
+		t.Fatalf("buildAndSaveBiscuit: %v", err)
+	}
+	nodeB.keysMu.Lock()
+	nodeB.trustedKeys = append(nodeB.trustedKeys, TrustedKey{Key: rootPub, ReceivedAt: time.Now()})
+	nodeB.keysMu.Unlock()
+
+	tools := []*mcp.Tool{
+		{
+			Name:        "review_pr",
+			Description: "Run a code review",
+			InputSchema: map[string]any{
+				"type":     "object",
+				"required": []any{"pr_url"},
+				"properties": map[string]any{
+					"pr_url": map[string]any{"type": "string"},
+				},
+			},
+			OutputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"summary": map[string]any{"type": "string"},
+				},
+			},
+		},
+	}
+	hostedSrv := httptest.NewServer(newFakeMCPHandler(t, tools))
+	defer hostedSrv.Close()
+
+	regReq := &api.RegisterServiceRequest{
+		Service: &api.ServiceInfo{Type: api.ServiceType_SERVICE_TYPE_MCP, Name: "code-reviewer"},
+		Backend: &api.RegisterServiceRequest_TargetUrl{TargetUrl: hostedSrv.URL},
+	}
+	if err := nodeB.RegisterService(ctx, regReq); err != nil {
+		t.Fatalf("RegisterService: %v", err)
+	}
+	defer func() { _ = nodeB.UnregisterService(ctx, "code-reviewer") }()
+
+	res, _, err := nodeA.handleDescribeRemoteTool(ctx, &mcp.CallToolRequest{}, DescribeRemoteToolParams{
+		PeerID:   nodeB.Host.ID().String(),
+		ToolName: "code-reviewer.review_pr",
+	})
+	if err != nil {
+		t.Fatalf("handleDescribeRemoteTool: %v", err)
+	}
+	tc, ok := res.Content[0].(*mcp.TextContent)
+	if !ok {
+		t.Fatalf("expected TextContent, got %T", res.Content[0])
+	}
+
+	var desc remoteToolDescription
+	if err := json.Unmarshal([]byte(tc.Text), &desc); err != nil {
+		t.Fatalf("unmarshal: %v (text: %q)", err, tc.Text)
+	}
+	if desc.PeerID != nodeB.Host.ID().String() {
+		t.Errorf("PeerID = %q, want %q", desc.PeerID, nodeB.Host.ID().String())
+	}
+	if desc.ToolName != "code-reviewer.review_pr" {
+		t.Errorf("ToolName = %q, want %q", desc.ToolName, "code-reviewer.review_pr")
+	}
+	if desc.Description != "Run a code review" {
+		t.Errorf("Description = %q, want %q", desc.Description, "Run a code review")
+	}
+	inSchema, ok := desc.InputSchema.(map[string]any)
+	if !ok {
+		t.Fatalf("InputSchema type = %T, want map[string]any", desc.InputSchema)
+	}
+	if inSchema["type"] != "object" {
+		t.Errorf("InputSchema.type = %v, want 'object'", inSchema["type"])
+	}
+	outSchema, ok := desc.OutputSchema.(map[string]any)
+	if !ok {
+		t.Fatalf("OutputSchema type = %T, want map[string]any", desc.OutputSchema)
+	}
+	if outSchema["type"] != "object" {
+		t.Errorf("OutputSchema.type = %v, want 'object'", outSchema["type"])
+	}
+}
+
+func TestHandleDescribeRemoteTool_RoundTrip_UnknownTool(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	nodeA, cleanupA := startBareNode(t, ctx)
+	defer cleanupA()
+	nodeB, cleanupB := startBareNode(t, ctx)
+	defer cleanupB()
+
+	if err := nodeA.Host.Connect(ctx, peer.AddrInfo{ID: nodeB.Host.ID(), Addrs: nodeB.Host.Addrs()}); err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+
+	rootPub, rootPriv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("gen root key: %v", err)
+	}
+	if err := buildAndSaveBiscuit(nodeA, rootPriv); err != nil {
+		t.Fatalf("buildAndSaveBiscuit: %v", err)
+	}
+	nodeB.keysMu.Lock()
+	nodeB.trustedKeys = append(nodeB.trustedKeys, TrustedKey{Key: rootPub, ReceivedAt: time.Now()})
+	nodeB.keysMu.Unlock()
+
+	tools := []*mcp.Tool{
+		{Name: "review_pr", Description: "x", InputSchema: map[string]any{"type": "object"}},
+	}
+	hostedSrv := httptest.NewServer(newFakeMCPHandler(t, tools))
+	defer hostedSrv.Close()
+	if err := nodeB.RegisterService(ctx, &api.RegisterServiceRequest{
+		Service: &api.ServiceInfo{Type: api.ServiceType_SERVICE_TYPE_MCP, Name: "code-reviewer"},
+		Backend: &api.RegisterServiceRequest_TargetUrl{TargetUrl: hostedSrv.URL},
+	}); err != nil {
+		t.Fatalf("RegisterService: %v", err)
+	}
+	defer func() { _ = nodeB.UnregisterService(ctx, "code-reviewer") }()
+
+	_, _, err = nodeA.handleDescribeRemoteTool(ctx, &mcp.CallToolRequest{}, DescribeRemoteToolParams{
+		PeerID:   nodeB.Host.ID().String(),
+		ToolName: "code-reviewer.does-not-exist",
+	})
+	if err == nil {
+		t.Fatal("expected error from peer when tool is not registered")
+	}
+	// Pin the exact wrapper format produced by handleDescribeRemoteTool's
+	// IsError branch. Matching the full prefix guarantees we exercised the
+	// IsError codepath, not a transport-level retry timeout or a JSON-parse
+	// fallback that happens to mention "tool not found".
+	wantPrefix := fmt.Sprintf("describe_local_tool on %s: tool not found:", nodeB.Host.ID())
+	if !strings.HasPrefix(err.Error(), wantPrefix) {
+		t.Errorf("error %q does not start with %q", err.Error(), wantPrefix)
+	}
+}
+
+func TestNewMCPHandler_RegistersDescribeRemoteTool(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	node, cleanup := startBareNode(t, ctx)
+	defer cleanup()
+
+	srv := httptest.NewServer(NewMCPHandler(node))
+	defer srv.Close()
+
+	client := mcp.NewClient(&mcp.Implementation{Name: "tc", Version: "0.0.1"}, nil)
+	transport := &mcp.SSEClientTransport{Endpoint: srv.URL + "/mcp/events"}
+	session, err := client.Connect(ctx, transport, nil)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer func() { _ = session.Close() }()
+
+	res, err := session.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatalf("list tools: %v", err)
+	}
+	found := false
+	for _, tl := range res.Tools {
+		if tl.Name == "describe_remote_tool" {
+			found = true
+		}
+	}
+	if !found {
+		var names []string
+		for _, tl := range res.Tools {
+			names = append(names, tl.Name)
+		}
+		t.Errorf("describe_remote_tool missing from sidecar tools/list; got %v", names)
 	}
 }

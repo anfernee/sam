@@ -104,6 +104,12 @@ func (n *SamNode) HandleMCPStream(s network.Stream) {
 		Description: "Get information about the mesh network",
 	}, n.handleGetMeshInfo)
 
+	// Add the describe_local_tool tool.
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "describe_local_tool",
+		Description: "Return the description, input schema, and output schema for a named aggregated tool on this node.",
+	}, n.handleDescribeLocalTool)
+
 	// Register aggregated hosted-service tools from MCP services.
 	infos := n.services.List(api.ServiceType_SERVICE_TYPE_MCP)
 	for _, info := range infos {

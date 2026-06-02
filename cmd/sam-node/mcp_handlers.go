@@ -444,3 +444,146 @@ func (n *SamNode) fanOutFetch(ctx context.Context, peers []peer.ID, serviceName 
 
 	return rows
 }
+
+// remoteToolDescription is the JSON payload describe_local_tool emits on the
+// peer side and describe_remote_tool re-emits on the caller side. The
+// caller-side handler fills PeerID; the peer-side handler leaves it empty.
+//
+// InputSchema and OutputSchema mirror mcp.Tool's typing (`any`): the SDK
+// surfaces them as map[string]any on the client side, and we re-marshal
+// them verbatim without imposing a typed-schema constraint.
+type remoteToolDescription struct {
+	PeerID       string `json:"peer_id,omitempty"`
+	ToolName     string `json:"tool_name"`
+	Description  string `json:"description"`
+	InputSchema  any    `json:"input_schema,omitempty"`
+	OutputSchema any    `json:"output_schema,omitempty"`
+}
+
+// DescribeLocalToolParams defines parameters for the describe_local_tool
+// peer-facing infra tool.
+type DescribeLocalToolParams struct {
+	ToolName string `json:"tool_name" jsonschema:"Namespaced tool name (e.g. 'code-reviewer.review_pr'). Required."`
+}
+
+// handleDescribeLocalTool implements the describe_local_tool peer-facing
+// infra tool. It scans MCP-typed services in the registry for an aggregated
+// tool whose namespaced Name matches params.ToolName and returns its
+// description + schemas as JSON in a TextContent.
+//
+// Errors: empty tool name → invalid argument; no match → "tool not found".
+// Both surface to the caller as MCP errors.
+func (n *SamNode) handleDescribeLocalTool(ctx context.Context, req *mcp.CallToolRequest, params DescribeLocalToolParams) (*mcp.CallToolResult, any, error) {
+	if params.ToolName == "" {
+		return nil, nil, fmt.Errorf("tool_name is required")
+	}
+	svcInfos := n.services.List(api.ServiceType_SERVICE_TYPE_MCP)
+	for _, info := range svcInfos {
+		svc, ok := n.services.Get(info.Name)
+		if !ok {
+			continue
+		}
+		mcpSvc, ok := svc.(*MCPService)
+		if !ok {
+			continue
+		}
+		for _, tool := range mcpSvc.Tools() {
+			if tool == nil || tool.Name != params.ToolName {
+				continue
+			}
+			payload := remoteToolDescription{
+				ToolName:     tool.Name,
+				Description:  tool.Description,
+				InputSchema:  tool.InputSchema,
+				OutputSchema: tool.OutputSchema,
+			}
+			body, err := json.Marshal(payload)
+			if err != nil {
+				return nil, nil, fmt.Errorf("marshal description: %w", err)
+			}
+			return &mcp.CallToolResult{
+				Content: []mcp.Content{&mcp.TextContent{Text: string(body)}},
+			}, nil, nil
+		}
+	}
+	return nil, nil, fmt.Errorf("tool not found: %s", params.ToolName)
+}
+
+// DescribeRemoteToolParams defines parameters for the describe_remote_tool
+// sidecar tool.
+type DescribeRemoteToolParams struct {
+	PeerID   string `json:"peer_id" jsonschema:"Peer ID of the node hosting the tool. Required."`
+	ToolName string `json:"tool_name" jsonschema:"Namespaced tool name as returned by find_remote_tools (e.g. 'code-reviewer.review_pr'). Required."`
+}
+
+// handleDescribeRemoteTool implements the describe_remote_tool sidecar
+// tool: validate inputs, open a libp2p MCP stream to the peer, call its
+// describe_local_tool, decorate the response with peer_id, and return.
+//
+// Validation: peer_id and tool_name must both be set; peer_id cannot equal
+// this node's own peer ID; tool_name must contain "." (describe_remote_tool
+// is for namespaced aggregated tools only); peer_id must parse as a libp2p
+// peer.ID.
+func (n *SamNode) handleDescribeRemoteTool(ctx context.Context, req *mcp.CallToolRequest, params DescribeRemoteToolParams) (*mcp.CallToolResult, any, error) {
+	if params.PeerID == "" {
+		return nil, nil, fmt.Errorf("peer_id is required")
+	}
+	if params.ToolName == "" {
+		return nil, nil, fmt.Errorf("tool_name is required")
+	}
+	if !strings.Contains(params.ToolName, ".") {
+		return nil, nil, fmt.Errorf("tool_name %q must be namespaced (contain '.'); describe_remote_tool is for aggregated tools only", params.ToolName)
+	}
+	selfID := n.Host.ID().String()
+	if params.PeerID == selfID {
+		return nil, nil, fmt.Errorf("peer_id %q is this node; cross-mesh describe cannot target self", params.PeerID)
+	}
+	targetPeer, err := peer.Decode(params.PeerID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("invalid peer_id %q: %w", params.PeerID, err)
+	}
+
+	res, err := n.CallMCPTool(ctx, targetPeer, "describe_local_tool", DescribeLocalToolParams{
+		ToolName: params.ToolName,
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("describe_local_tool on %s: %w", targetPeer, err)
+	}
+	if res == nil {
+		return nil, nil, fmt.Errorf("nil response from %s", targetPeer)
+	}
+	// The Go SDK packs handler-returned errors into CallToolResult.IsError
+	// rather than propagating them as Go errors from session.CallTool. Check
+	// IsError before the empty-content guard so an errored response with no
+	// body still surfaces as a describe_local_tool error rather than an
+	// ambiguous "empty response".
+	if res.IsError {
+		errText := "(no detail)"
+		if len(res.Content) > 0 {
+			if tc, ok := res.Content[0].(*mcp.TextContent); ok && tc.Text != "" {
+				errText = tc.Text
+			}
+		}
+		return nil, nil, fmt.Errorf("describe_local_tool on %s: %s", targetPeer, errText)
+	}
+	if len(res.Content) == 0 {
+		return nil, nil, fmt.Errorf("empty response from %s", targetPeer)
+	}
+	tc, ok := res.Content[0].(*mcp.TextContent)
+	if !ok {
+		return nil, nil, fmt.Errorf("unexpected content type from %s: %T", targetPeer, res.Content[0])
+	}
+	var remoteToolDesc remoteToolDescription
+	if err := json.Unmarshal([]byte(tc.Text), &remoteToolDesc); err != nil {
+		return nil, nil, fmt.Errorf("parse describe response from %s: %w", targetPeer, err)
+	}
+	remoteToolDesc.PeerID = params.PeerID
+
+	mRemoteToolDesc, err := json.Marshal(remoteToolDesc)
+	if err != nil {
+		return nil, nil, fmt.Errorf("marshal description: %w", err)
+	}
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{&mcp.TextContent{Text: string(mRemoteToolDesc)}},
+	}, nil, nil
+}
