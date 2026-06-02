@@ -8,6 +8,8 @@ spec:
   loadBalancerClass: "networking.gke.io/l4-regional-external"
   loadBalancerIP: ${LOAD_BALANCER_IP}
   allocateLoadBalancerNodePorts: false
+  sessionAffinity: ClientIP
+  externalTrafficPolicy: Local
   ports:
     - port: 4001
       targetPort: 4001
@@ -64,12 +66,6 @@ spec:
               name: sam-hub-secret
               key: sam-hub-key
               optional: true # Make it optional so it doesn't block local kind testing if not created
-        - name: SAM_LIBP2P_KEY
-          valueFrom:
-            secretKeyRef:
-              name: sam-hub-secret
-              key: sam-libp2p-key
-              optional: true
         ports:
         - containerPort: 4001
           protocol: TCP
@@ -104,7 +100,6 @@ spec:
         - "--tls-cert-file=/etc/sam/certs/tls.crt"
         - "--tls-key-file=/etc/sam/certs/tls.key"
         - "--policy-file=/etc/sam/policies/policies.yaml"
-        - "--libp2p-key=$(SAM_LIBP2P_KEY)"
         resources:
           requests:
             cpu: 100m
