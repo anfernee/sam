@@ -81,13 +81,23 @@ type nodeRelayACL struct {
 }
 
 func (a *nodeRelayACL) AllowReserve(p peer.ID, addr multiaddr.Multiaddr) bool {
-	_, ok := a.node.authPeers.Load(p)
-	return ok
+	for i := 0; i < 20; i++ {
+		if _, ok := a.node.authPeers.Load(p); ok {
+			return true
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	return false
 }
 
 func (a *nodeRelayACL) AllowConnect(src peer.ID, srcAddr multiaddr.Multiaddr, dest peer.ID) bool {
-	_, ok := a.node.authPeers.Load(src)
-	return ok
+	for i := 0; i < 20; i++ {
+		if _, ok := a.node.authPeers.Load(src); ok {
+			return true
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	return false
 }
 
 type SamNode struct {
@@ -120,13 +130,13 @@ func NewSamNode(ctx context.Context, privKey crypto.PrivKey, hubPubKey ed25519.P
 	}
 
 	node := &SamNode{
-		Store:        store,
-		trustedKeys:  trustedKeys,
+		Store:             store,
+		trustedKeys:       trustedKeys,
 		peerLastEventTime: make(map[string]int64),
 		receivedMsgs:      make(map[string][]string),
-		topics:       make(map[string]*pubsub.Topic),
-		LocalPolicy:   nodeConfig,
-		AllowLoopback: allowLoopback,
+		topics:            make(map[string]*pubsub.Topic),
+		LocalPolicy:       nodeConfig,
+		AllowLoopback:     allowLoopback,
 	}
 
 	var err error
@@ -245,7 +255,6 @@ func NewSamNode(ctx context.Context, privKey crypto.PrivKey, hubPubKey ed25519.P
 			return nil, fmt.Errorf("fatal auth failure: %w", fatalAuthErr)
 		}
 	}
-
 
 	// Initialize Gossipsub for Hub Events
 	ps, err := pubsub.NewGossipSub(ctx, h)
@@ -492,11 +501,11 @@ func (n *SamNode) listenForHubEvents(ctx context.Context) {
 		}
 
 		// Freshness check: reject events older than the threshold to prevent replay attacks
-        eventTime := time.UnixMilli(event.Timestamp)
-        if time.Since(eventTime) > FreshnessThreshold || time.Until(eventTime) > FreshnessThreshold {
-            logger.Warnf("[Mesh Event] Dropping stale or future event from %s (timestamp: %d)", msg.ReceivedFrom, event.Timestamp)
-            continue
-        }
+		eventTime := time.UnixMilli(event.Timestamp)
+		if time.Since(eventTime) > FreshnessThreshold || time.Until(eventTime) > FreshnessThreshold {
+			logger.Warnf("[Mesh Event] Dropping stale or future event from %s (timestamp: %d)", msg.ReceivedFrom, event.Timestamp)
+			continue
+		}
 
 		switch event.Type {
 		case api.MeshEvent_BANNED:
@@ -506,8 +515,6 @@ func (n *SamNode) listenForHubEvents(ctx context.Context) {
 		}
 	}
 }
-
-
 
 func (n *SamNode) handleBannedEvent(event *api.MeshEvent) {
 	n.mu.Lock()
@@ -939,7 +946,6 @@ func (n *SamNode) DiscoverRemoteServicesStream(ctx context.Context, serviceType 
 	return out, nil
 }
 
-
 // discoverServicesByName: targeted DHT lookup, no fan-out.
 func (n *SamNode) discoverServicesByName(ctx context.Context, serviceType api.ServiceType, typeStr, serviceName string) ([]*api.DiscoveredProvider, error) {
 	peers, err := n.FindProvidersByName(ctx, serviceType, serviceName)
@@ -1091,4 +1097,3 @@ func isLoopbackOrLinkLocal(addr multiaddr.Multiaddr) bool {
 	}
 	return false
 }
-

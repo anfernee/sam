@@ -18,6 +18,7 @@ import (
 	"github.com/libp2p/go-libp2p/core/network"
 
 	"sync"
+
 	"github.com/libp2p/go-msgio"
 
 	"context"
@@ -106,36 +107,44 @@ var (
 
 var logger = golog.Logger("sam-hub")
 
-
 type relayACL struct {
 	hub *Hub
 }
 
 func (a *relayACL) AllowReserve(p peer.ID, addr multiaddr.Multiaddr) bool {
-	_, ok := a.hub.authenticatedPeers.Load(p)
-	return ok
+	for i := 0; i < 20; i++ {
+		if _, ok := a.hub.authenticatedPeers.Load(p); ok {
+			return true
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	return false
 }
 
 func (a *relayACL) AllowConnect(src peer.ID, srcAddr multiaddr.Multiaddr, dest peer.ID) bool {
-	_, ok := a.hub.authenticatedPeers.Load(src)
-	return ok
+	for i := 0; i < 20; i++ {
+		if _, ok := a.hub.authenticatedPeers.Load(src); ok {
+			return true
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	return false
 }
-
 
 // Hub handles identity bridging and network discovery
 type Hub struct {
-	Host             host.Host
-	DHT              *dht.IpfsDHT
-	Providers        map[string]*oidc.Provider
-	KeyRing          *KeyRing
-	MeshID           string
-	PubSub           *pubsub.PubSub
-	EventTopic       *pubsub.Topic
-	Policy           *api.PolicyConfig
-	limiter          *rate.Limiter
-	ExternalAddrs    []string
-	AllowedAudiences []string
-	AllowLoopback    bool
+	Host               host.Host
+	DHT                *dht.IpfsDHT
+	Providers          map[string]*oidc.Provider
+	KeyRing            *KeyRing
+	MeshID             string
+	PubSub             *pubsub.PubSub
+	EventTopic         *pubsub.Topic
+	Policy             *api.PolicyConfig
+	limiter            *rate.Limiter
+	ExternalAddrs      []string
+	AllowedAudiences   []string
+	AllowLoopback      bool
 	authenticatedPeers sync.Map
 }
 
@@ -260,9 +269,9 @@ func NewHub(ctx context.Context, policy *api.PolicyConfig, allowLoopback bool) (
 	if err != nil {
 		return nil, err
 	}
-	
+
 	h.SetStreamHandler(api.AuthProtocolID, hub.HandleAuthHandshake)
-	
+
 	h.Network().Notify(&network.NotifyBundle{
 		DisconnectedF: func(n network.Network, c network.Conn) {
 			p := c.RemotePeer()
@@ -274,7 +283,6 @@ func NewHub(ctx context.Context, policy *api.PolicyConfig, allowLoopback bool) (
 
 	return hub, nil
 }
-
 
 func (h *Hub) parseAndVerifyJWT(ctx context.Context, jwtStr string, allowedAudiences []string) (jwt.MapClaims, *oidc.IDToken, error) {
 	jwtParser := jwt.Parser{}
