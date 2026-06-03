@@ -15,6 +15,8 @@
 package main
 
 import (
+	"github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/relay"
+
 	"bytes"
 	"context"
 	"crypto/ed25519"
@@ -45,6 +47,7 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/p2p/discovery/routing"
 	"github.com/libp2p/go-libp2p/p2p/discovery/util"
+	"github.com/libp2p/go-libp2p/p2p/host/autorelay"
 	"github.com/libp2p/go-libp2p/p2p/net/connmgr"
 	libp2ptls "github.com/libp2p/go-libp2p/p2p/security/tls"
 	libp2pquic "github.com/libp2p/go-libp2p/p2p/transport/quic"
@@ -74,7 +77,19 @@ type TrustedKey struct {
 	ReceivedAt time.Time
 }
 
+type nodeRelayACL struct {
+	node *SamNode
+}
 
+func (a *nodeRelayACL) AllowReserve(p peer.ID, addr multiaddr.Multiaddr) bool {
+	_, ok := a.node.authPeers.Load(p)
+	return ok
+}
+
+func (a *nodeRelayACL) AllowConnect(src peer.ID, srcAddr multiaddr.Multiaddr, dest peer.ID) bool {
+	_, ok := a.node.authPeers.Load(src)
+	return ok
+}
 
 type SamNode struct {
 	Host              host.Host
@@ -82,7 +97,6 @@ type SamNode struct {
 	PubSub            *pubsub.PubSub
 	Store             *Store
 	HubPeerID         peer.ID
-	knownPeers        map[string]bool
 	peerLastEventTime map[string]int64
 	receivedMsgs      map[string][]string
 	topics            map[string]*pubsub.Topic
@@ -90,6 +104,7 @@ type SamNode struct {
 	LocalPolicy       *NodeConfigComplete
 	revokedPeers      *lru.Cache[string, int64]
 	verificationCache *lru.Cache[string, string]
+	authPeers         sync.Map
 	trustedKeys       []TrustedKey
 	keysMu            sync.RWMutex
 	rateLimiter       *PeerRateLimiter
@@ -106,14 +121,13 @@ func NewSamNode(ctx context.Context, privKey crypto.PrivKey, hubPubKey ed25519.P
 	}
 
 	node := &SamNode{
-		Store:        store,
-		trustedKeys:  trustedKeys,
-		knownPeers:        make(map[string]bool),
+		Store:             store,
+		trustedKeys:       trustedKeys,
 		peerLastEventTime: make(map[string]int64),
 		receivedMsgs:      make(map[string][]string),
-		topics:       make(map[string]*pubsub.Topic),
-		LocalPolicy:   nodeConfig,
-		AllowLoopback: allowLoopback,
+		topics:            make(map[string]*pubsub.Topic),
+		LocalPolicy:       nodeConfig,
+		AllowLoopback:     allowLoopback,
 	}
 
 	var err error
@@ -176,13 +190,16 @@ func NewSamNode(ctx context.Context, privKey crypto.PrivKey, hubPubKey ed25519.P
 
 	// If we have a Hub, configure it as our static fallback relay for NAT hole-punching
 	if len(staticRelays) > 0 {
-		opts = append(opts, libp2p.EnableAutoRelayWithStaticRelays(staticRelays))
+		opts = append(opts, libp2p.EnableAutoRelayWithStaticRelays(
+			staticRelays,
+			autorelay.WithBootDelay(2*time.Second),
+			autorelay.WithBackoff(3*time.Second),
+		))
 	}
 
 	// If the user explicitly opts in, allow this node to serve as a relay for others
 	if enableRelay {
 		logger.Infof("[Relay] Enabling Relay Service")
-		opts = append(opts, libp2p.EnableRelayService())
 	}
 
 	h, err := libp2p.New(opts...)
@@ -190,6 +207,14 @@ func NewSamNode(ctx context.Context, privKey crypto.PrivKey, hubPubKey ed25519.P
 		return nil, err
 	}
 	node.Host = h
+
+	if enableRelay {
+		logger.Infof("[Relay] Enabling Relay Service with ACL")
+		_, err = relay.New(h, relay.WithACL(&nodeRelayACL{node: node}))
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	// Initialize Rendezvous (DHT Client)
 	kdht, err := dht.New(ctx, h, dht.Mode(dht.ModeAuto), dht.ProtocolPrefix("/sam"))
@@ -225,7 +250,6 @@ func NewSamNode(ctx context.Context, privKey crypto.PrivKey, hubPubKey ed25519.P
 			return nil, fmt.Errorf("fatal auth failure: %w", fatalAuthErr)
 		}
 	}
-
 
 	// Initialize Gossipsub for Hub Events
 	ps, err := pubsub.NewGossipSub(ctx, h)
@@ -472,57 +496,19 @@ func (n *SamNode) listenForHubEvents(ctx context.Context) {
 		}
 
 		// Freshness check: reject events older than the threshold to prevent replay attacks
-        eventTime := time.UnixMilli(event.Timestamp)
-        if time.Since(eventTime) > FreshnessThreshold || time.Until(eventTime) > FreshnessThreshold {
-            logger.Warnf("[Mesh Event] Dropping stale or future event from %s (timestamp: %d)", msg.ReceivedFrom, event.Timestamp)
-            continue
-        }
+		eventTime := time.UnixMilli(event.Timestamp)
+		if time.Since(eventTime) > FreshnessThreshold || time.Until(eventTime) > FreshnessThreshold {
+			logger.Warnf("[Mesh Event] Dropping stale or future event from %s (timestamp: %d)", msg.ReceivedFrom, event.Timestamp)
+			continue
+		}
 
 		switch event.Type {
-		case api.MeshEvent_JOIN:
-			n.handleJoinEvent(&event)
-		case api.MeshEvent_EXIT:
-			n.handleExitEvent(&event)
 		case api.MeshEvent_BANNED:
 			n.handleBannedEvent(&event)
 		case api.MeshEvent_KEY_ROTATION:
 			n.handleKeyRotationEvent(&event)
 		}
 	}
-}
-
-func (n *SamNode) handleJoinEvent(event *api.MeshEvent) {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	if n.peerLastEventTime == nil {
-		n.peerLastEventTime = make(map[string]int64)
-	}
-	if event.Timestamp < n.peerLastEventTime[event.PeerId] {
-		logger.Warnf("[Mesh Event] Dropping out-of-order JOIN event for peer %s (event timestamp: %d, last processed: %d)", event.PeerId, event.Timestamp, n.peerLastEventTime[event.PeerId])
-		return
-	}
-	n.peerLastEventTime[event.PeerId] = event.Timestamp
-
-	if n.Host == nil || event.PeerId != n.Host.ID().String() {
-		n.knownPeers[event.PeerId] = true
-	}
-	logger.Infof("[Mesh Event] Peer joined: %s", event.PeerId)
-}
-
-func (n *SamNode) handleExitEvent(event *api.MeshEvent) {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	if n.peerLastEventTime == nil {
-		n.peerLastEventTime = make(map[string]int64)
-	}
-	if event.Timestamp < n.peerLastEventTime[event.PeerId] {
-		logger.Warnf("[Mesh Event] Dropping out-of-order EXIT event for peer %s (event timestamp: %d, last processed: %d)", event.PeerId, event.Timestamp, n.peerLastEventTime[event.PeerId])
-		return
-	}
-	n.peerLastEventTime[event.PeerId] = event.Timestamp
-
-	delete(n.knownPeers, event.PeerId)
-	logger.Infof("[Mesh Event] Peer left: %s", event.PeerId)
 }
 
 func (n *SamNode) handleBannedEvent(event *api.MeshEvent) {
@@ -537,7 +523,6 @@ func (n *SamNode) handleBannedEvent(event *api.MeshEvent) {
 	}
 	n.peerLastEventTime[event.PeerId] = event.Timestamp
 
-	delete(n.knownPeers, event.PeerId)
 	n.mu.Unlock()
 
 	logger.Infof("[Mesh Event] Peer banned: %s", event.PeerId)
@@ -675,9 +660,6 @@ func (n *SamNode) startDiscovery(ctx context.Context, meshID string, interval ti
 				if p.ID == n.Host.ID() {
 					continue
 				}
-				n.mu.Lock()
-				n.knownPeers[p.ID.String()] = true
-				n.mu.Unlock()
 
 				if n.Host.Network().Connectedness(p.ID) != network.Connected {
 					logger.Infof("[Discovery] Found peer not connected via DHT: %s", p.ID)
@@ -732,6 +714,7 @@ func (n *SamNode) HandleAuthHandshake(s network.Stream) {
 		return
 	}
 
+	n.authPeers.Store(remotePeer, true)
 	logger.Infof("[AuthN] Successfully authenticated peer %s", remotePeer)
 }
 
@@ -958,7 +941,6 @@ func (n *SamNode) DiscoverRemoteServicesStream(ctx context.Context, serviceType 
 	return out, nil
 }
 
-
 // discoverServicesByName: targeted DHT lookup, no fan-out.
 func (n *SamNode) discoverServicesByName(ctx context.Context, serviceType api.ServiceType, typeStr, serviceName string) ([]*api.DiscoveredProvider, error) {
 	peers, err := n.FindProvidersByName(ctx, serviceType, serviceName)
@@ -1110,4 +1092,3 @@ func isLoopbackOrLinkLocal(addr multiaddr.Multiaddr) bool {
 	}
 	return false
 }
-
