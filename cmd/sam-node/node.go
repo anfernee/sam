@@ -15,6 +15,8 @@
 package main
 
 import (
+	"github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/relay"
+
 	"bytes"
 	"context"
 	"crypto/ed25519"
@@ -74,7 +76,19 @@ type TrustedKey struct {
 	ReceivedAt time.Time
 }
 
+type nodeRelayACL struct {
+	node *SamNode
+}
 
+func (a *nodeRelayACL) AllowReserve(p peer.ID, addr multiaddr.Multiaddr) bool {
+	_, ok := a.node.authPeers.Load(p)
+	return ok
+}
+
+func (a *nodeRelayACL) AllowConnect(src peer.ID, srcAddr multiaddr.Multiaddr, dest peer.ID) bool {
+	_, ok := a.node.authPeers.Load(src)
+	return ok
+}
 
 type SamNode struct {
 	Host              host.Host
@@ -89,6 +103,7 @@ type SamNode struct {
 	LocalPolicy       *NodeConfigComplete
 	revokedPeers      *lru.Cache[string, int64]
 	verificationCache *lru.Cache[string, string]
+	authPeers         sync.Map
 	trustedKeys       []TrustedKey
 	keysMu            sync.RWMutex
 	rateLimiter       *PeerRateLimiter
@@ -180,7 +195,6 @@ func NewSamNode(ctx context.Context, privKey crypto.PrivKey, hubPubKey ed25519.P
 	// If the user explicitly opts in, allow this node to serve as a relay for others
 	if enableRelay {
 		logger.Infof("[Relay] Enabling Relay Service")
-		opts = append(opts, libp2p.EnableRelayService())
 	}
 
 	h, err := libp2p.New(opts...)
@@ -188,6 +202,14 @@ func NewSamNode(ctx context.Context, privKey crypto.PrivKey, hubPubKey ed25519.P
 		return nil, err
 	}
 	node.Host = h
+
+	if enableRelay {
+		logger.Infof("[Relay] Enabling Relay Service with ACL")
+		_, err = relay.New(h, relay.WithACL(&nodeRelayACL{node: node}))
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	// Initialize Rendezvous (DHT Client)
 	kdht, err := dht.New(ctx, h, dht.Mode(dht.ModeAuto), dht.ProtocolPrefix("/sam"))
@@ -690,6 +712,7 @@ func (n *SamNode) HandleAuthHandshake(s network.Stream) {
 		return
 	}
 
+	n.authPeers.Store(remotePeer, true)
 	logger.Infof("[AuthN] Successfully authenticated peer %s", remotePeer)
 }
 

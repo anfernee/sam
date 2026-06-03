@@ -15,6 +15,11 @@
 package main
 
 import (
+	"github.com/libp2p/go-libp2p/core/network"
+
+	"sync"
+	"github.com/libp2p/go-msgio"
+
 	"context"
 	"crypto/ed25519"
 	"crypto/tls"
@@ -101,6 +106,22 @@ var (
 
 var logger = golog.Logger("sam-hub")
 
+
+type relayACL struct {
+	hub *Hub
+}
+
+func (a *relayACL) AllowReserve(p peer.ID, addr multiaddr.Multiaddr) bool {
+	_, ok := a.hub.authenticatedPeers.Load(p)
+	return ok
+}
+
+func (a *relayACL) AllowConnect(src peer.ID, srcAddr multiaddr.Multiaddr, dest peer.ID) bool {
+	_, ok := a.hub.authenticatedPeers.Load(src)
+	return ok
+}
+
+
 // Hub handles identity bridging and network discovery
 type Hub struct {
 	Host             host.Host
@@ -115,6 +136,7 @@ type Hub struct {
 	ExternalAddrs    []string
 	AllowedAudiences []string
 	AllowLoopback    bool
+	authenticatedPeers sync.Map
 }
 
 // NewHub starts a host supporting both QUIC and TCP (with TLS 1.3)
@@ -132,7 +154,6 @@ func NewHub(ctx context.Context, policy *api.PolicyConfig, allowLoopback bool) (
 		libp2p.ListenAddrStrings(listenAddrs...),
 		// FIPS compliant Security
 		libp2p.Security(libp2ptls.ID, libp2ptls.New),
-		libp2p.EnableRelayService(),
 		libp2p.ConnectionManager(cm),
 		libp2p.EnableAutoNATv2(),
 		libp2p.EnableNATService(),
@@ -149,11 +170,6 @@ func NewHub(ctx context.Context, policy *api.PolicyConfig, allowLoopback bool) (
 			return filtered
 		}),
 	)
-	if err != nil {
-		return nil, err
-	}
-
-	_, err = relay.New(h)
 	if err != nil {
 		return nil, err
 	}
@@ -239,6 +255,22 @@ func NewHub(ctx context.Context, policy *api.PolicyConfig, allowLoopback bool) (
 
 	hub.PubSub = ps
 	hub.EventTopic = topic
+
+	_, err = relay.New(h, relay.WithACL(&relayACL{hub: hub}))
+	if err != nil {
+		return nil, err
+	}
+	
+	h.SetStreamHandler(api.AuthProtocolID, hub.HandleAuthHandshake)
+	
+	h.Network().Notify(&network.NotifyBundle{
+		DisconnectedF: func(n network.Network, c network.Conn) {
+			p := c.RemotePeer()
+			if len(h.Network().ConnsToPeer(p)) == 0 {
+				hub.authenticatedPeers.Delete(p)
+			}
+		},
+	})
 
 	return hub, nil
 }
@@ -719,4 +751,85 @@ func isLoopbackOrLinkLocal(addr multiaddr.Multiaddr) bool {
 		}
 	}
 	return false
+}
+
+func (h *Hub) verifyBiscuit(biscuitData []byte, remotePeer peer.ID) (*biscuit.Biscuit, error) {
+	b, err := biscuit.Unmarshal(biscuitData)
+	if err != nil {
+		return nil, fmt.Errorf("malformed biscuit: %w", err)
+	}
+
+	keys := h.KeyRing.GetAllValidPublicKeys()
+	var lastErr error
+	for _, pubKey := range keys {
+		authorizer, err := b.Authorizer(pubKey)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+
+		rule, err := parser.FromStringPolicy("allow if true")
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		authorizer.AddPolicy(rule)
+
+		if err := authorizer.Authorize(); err == nil {
+			return b, nil
+		} else {
+			lastErr = err
+		}
+	}
+
+	return nil, fmt.Errorf("no valid key found for verification: %v", lastErr)
+}
+
+func (h *Hub) HandleAuthHandshake(s network.Stream) {
+	defer func() {
+		if err := s.Close(); err != nil {
+			logger.Debugf("[AuthN] Failed to close auth stream: %v", err)
+		}
+	}()
+	remotePeer := s.Conn().RemotePeer()
+
+	reader := msgio.NewVarintReaderSize(s, 1024*64)
+	msg, err := reader.ReadMsg()
+	if err != nil {
+		logger.Errorf("[AuthN] Failed to read handshake from %s: %v", remotePeer, err)
+		return
+	}
+	defer reader.ReleaseMsg(msg)
+
+	var exchange api.AuthFrame
+	if err := proto.Unmarshal(msg, &exchange); err != nil {
+		logger.Warnf("[AuthN] Invalid protobuf from %s", remotePeer)
+		return
+	}
+
+	b, err := h.verifyBiscuit(exchange.Biscuit, remotePeer)
+	if err != nil {
+		logger.Warnf("[AuthN] Authorization failed for %s: %v", remotePeer, err)
+		return
+	}
+
+	// Enforce hardware binding
+	boundFact := biscuit.Fact{Predicate: biscuit.Predicate{
+		Name: "node",
+		IDs:  []biscuit.Term{biscuit.String(remotePeer.String())},
+	}}
+	if _, err := b.GetBlockID(boundFact); err != nil {
+		logger.Warnf("[AuthN] Token is not bound to peer %s", remotePeer)
+		return
+	}
+
+	h.authenticatedPeers.Store(remotePeer, true)
+	logger.Infof("[AuthN] Successfully authenticated peer %s", remotePeer)
+
+	writer := msgio.NewVarintWriter(s)
+	resp := &api.AuthResponse{Success: true}
+	respBytes, _ := proto.Marshal(resp)
+	if err := writer.WriteMsg(respBytes); err != nil {
+		logger.Errorf("[AuthN] Failed to write ACK to %s: %v", remotePeer, err)
+	}
 }
