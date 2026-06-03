@@ -266,7 +266,7 @@ func (h *Hub) pruneStaleData() {
 	nowMilli := now.UnixMilli()
 	for p, ts := range h.gater.lastUpdated {
 		if !h.gater.authenticated[p] {
-			if nowMilli-ts > 3600*1000 { // 1 hour
+            if nowMilli-ts > int64(time.Hour/time.Millisecond) {
 				delete(h.gater.lastUpdated, p)
 				logger.Debugf("Pruned transient peer %s from lastUpdated", p.String())
 			}
