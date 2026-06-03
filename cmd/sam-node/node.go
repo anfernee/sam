@@ -82,7 +82,6 @@ type SamNode struct {
 	PubSub            *pubsub.PubSub
 	Store             *Store
 	HubPeerID         peer.ID
-	knownPeers        map[string]bool
 	peerLastEventTime map[string]int64
 	receivedMsgs      map[string][]string
 	topics            map[string]*pubsub.Topic
@@ -108,7 +107,6 @@ func NewSamNode(ctx context.Context, privKey crypto.PrivKey, hubPubKey ed25519.P
 	node := &SamNode{
 		Store:        store,
 		trustedKeys:  trustedKeys,
-		knownPeers:        make(map[string]bool),
 		peerLastEventTime: make(map[string]int64),
 		receivedMsgs:      make(map[string][]string),
 		topics:       make(map[string]*pubsub.Topic),
@@ -479,10 +477,6 @@ func (n *SamNode) listenForHubEvents(ctx context.Context) {
         }
 
 		switch event.Type {
-		case api.MeshEvent_JOIN:
-			n.handleJoinEvent(&event)
-		case api.MeshEvent_EXIT:
-			n.handleExitEvent(&event)
 		case api.MeshEvent_BANNED:
 			n.handleBannedEvent(&event)
 		case api.MeshEvent_KEY_ROTATION:
@@ -491,39 +485,7 @@ func (n *SamNode) listenForHubEvents(ctx context.Context) {
 	}
 }
 
-func (n *SamNode) handleJoinEvent(event *api.MeshEvent) {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	if n.peerLastEventTime == nil {
-		n.peerLastEventTime = make(map[string]int64)
-	}
-	if event.Timestamp < n.peerLastEventTime[event.PeerId] {
-		logger.Warnf("[Mesh Event] Dropping out-of-order JOIN event for peer %s (event timestamp: %d, last processed: %d)", event.PeerId, event.Timestamp, n.peerLastEventTime[event.PeerId])
-		return
-	}
-	n.peerLastEventTime[event.PeerId] = event.Timestamp
 
-	if n.Host == nil || event.PeerId != n.Host.ID().String() {
-		n.knownPeers[event.PeerId] = true
-	}
-	logger.Infof("[Mesh Event] Peer joined: %s", event.PeerId)
-}
-
-func (n *SamNode) handleExitEvent(event *api.MeshEvent) {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	if n.peerLastEventTime == nil {
-		n.peerLastEventTime = make(map[string]int64)
-	}
-	if event.Timestamp < n.peerLastEventTime[event.PeerId] {
-		logger.Warnf("[Mesh Event] Dropping out-of-order EXIT event for peer %s (event timestamp: %d, last processed: %d)", event.PeerId, event.Timestamp, n.peerLastEventTime[event.PeerId])
-		return
-	}
-	n.peerLastEventTime[event.PeerId] = event.Timestamp
-
-	delete(n.knownPeers, event.PeerId)
-	logger.Infof("[Mesh Event] Peer left: %s", event.PeerId)
-}
 
 func (n *SamNode) handleBannedEvent(event *api.MeshEvent) {
 	n.mu.Lock()
@@ -537,7 +499,6 @@ func (n *SamNode) handleBannedEvent(event *api.MeshEvent) {
 	}
 	n.peerLastEventTime[event.PeerId] = event.Timestamp
 
-	delete(n.knownPeers, event.PeerId)
 	n.mu.Unlock()
 
 	logger.Infof("[Mesh Event] Peer banned: %s", event.PeerId)
@@ -675,9 +636,6 @@ func (n *SamNode) startDiscovery(ctx context.Context, meshID string, interval ti
 				if p.ID == n.Host.ID() {
 					continue
 				}
-				n.mu.Lock()
-				n.knownPeers[p.ID.String()] = true
-				n.mu.Unlock()
 
 				if n.Host.Network().Connectedness(p.ID) != network.Connected {
 					logger.Infof("[Discovery] Found peer not connected via DHT: %s", p.ID)

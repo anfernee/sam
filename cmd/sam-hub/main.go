@@ -38,13 +38,11 @@ import (
 	dht "github.com/libp2p/go-libp2p-kad-dht"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	"github.com/libp2p/go-libp2p/core/host"
-	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/p2p/net/connmgr"
 	"github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/relay"
 	libp2ptls "github.com/libp2p/go-libp2p/p2p/security/tls"
 	libp2pquic "github.com/libp2p/go-libp2p/p2p/transport/quic"
-	"github.com/libp2p/go-msgio"
 	"github.com/multiformats/go-multiaddr"
 
 	"golang.org/x/time/rate"
@@ -112,21 +110,15 @@ type Hub struct {
 	MeshID           string
 	PubSub           *pubsub.PubSub
 	EventTopic       *pubsub.Topic
-	SyncTopic        *pubsub.Topic
-	otherHubAddrs    map[peer.ID][]string
-	otherHubLastSeen map[peer.ID]time.Time
-	gater            *hubConnGate
 	Policy           *api.PolicyConfig
 	limiter          *rate.Limiter
 	ExternalAddrs    []string
 	AllowedAudiences []string
 	AllowLoopback    bool
-	SyncKey          []byte
 }
 
 // NewHub starts a host supporting both QUIC and TCP (with TLS 1.3)
 func NewHub(ctx context.Context, policy *api.PolicyConfig, allowLoopback bool) (*Hub, error) {
-	gater := newHubConnGate()
 
 	// Connection Manager for DoS protection
 	cm, err := connmgr.NewConnManager(LowWaterMark, HighWaterMark, connmgr.WithGracePeriod(ConnGracePeriod))
@@ -141,7 +133,6 @@ func NewHub(ctx context.Context, policy *api.PolicyConfig, allowLoopback bool) (
 		// FIPS compliant Security
 		libp2p.Security(libp2ptls.ID, libp2ptls.New),
 		libp2p.EnableRelayService(),
-		libp2p.ConnectionGater(gater),
 		libp2p.ConnectionManager(cm),
 		libp2p.EnableAutoNATv2(),
 		libp2p.EnableNATService(),
@@ -228,7 +219,6 @@ func NewHub(ctx context.Context, policy *api.PolicyConfig, allowLoopback bool) (
 	hub := &Hub{
 		Host:             h,
 		DHT:              kadDHT,
-		gater:            gater,
 		Providers:        providers,
 		KeyRing:          kr,
 		MeshID:           meshName,
@@ -237,20 +227,7 @@ func NewHub(ctx context.Context, policy *api.PolicyConfig, allowLoopback bool) (
 		ExternalAddrs:    externalMultiaddrs,
 		AllowedAudiences: auds,
 		AllowLoopback:    allowLoopback,
-		otherHubAddrs:    make(map[peer.ID][]string),
-		otherHubLastSeen: make(map[peer.ID]time.Time),
-		SyncKey: func() []byte {
-			if len(initialSeed) > 0 {
-				return initialSeed
-			}
-			if kr != nil {
-				return kr.GetCurrentKey()
-			}
-			return nil
-		}(),
 	}
-
-	h.Network().Notify(&notifier{hub: hub})
 	ps, err := pubsub.NewGossipSub(ctx, h)
 	if err != nil {
 		return nil, err
@@ -260,105 +237,10 @@ func NewHub(ctx context.Context, policy *api.PolicyConfig, allowLoopback bool) (
 		return nil, err
 	}
 
-	syncTopic, err := ps.Join(api.GossipHubSync)
-	if err != nil {
-		return nil, err
-	}
-
 	hub.PubSub = ps
 	hub.EventTopic = topic
-	hub.SyncTopic = syncTopic
-	hub.startSyncListener(ctx)
 
 	return hub, nil
-}
-
-func (h *Hub) handleAuthHandshake(s network.Stream) {
-	defer func() {
-		if err := s.Close(); err != nil {
-			logger.Errorf("[AuthN] Failed to close auth stream: %v", err)
-		}
-	}()
-	remotePeer := s.Conn().RemotePeer()
-
-	reader := msgio.NewVarintReaderSize(s, 1024*64)
-	msg, err := reader.ReadMsg()
-	if err != nil {
-		logger.Errorf("[AuthN] Failed to read handshake from %s: %v", remotePeer, err)
-		return
-	}
-	defer reader.ReleaseMsg(msg)
-
-	var exchange api.AuthFrame
-	if err := proto.Unmarshal(msg, &exchange); err != nil {
-		logger.Warnf("[AuthN] Invalid protobuf from %s", remotePeer)
-		return
-	}
-
-	b, err := h.verifyBiscuit(exchange.Biscuit, remotePeer)
-	if err != nil {
-		logger.Warnf("[AuthN] Authorization failed for %s: %v", remotePeer, err)
-		return
-	}
-
-	// Enforce hardware binding: token must include node(<remotePeerID>)
-	boundFact := biscuit.Fact{Predicate: biscuit.Predicate{
-		Name: "node",
-		IDs:  []biscuit.Term{biscuit.String(remotePeer.String())},
-	}}
-	if _, err := b.GetBlockID(boundFact); err != nil {
-		logger.Warnf("[AuthN] Token is not bound to peer %s", remotePeer)
-		return
-	}
-
-	logger.Infof("[AuthN] Successfully authenticated peer %s", remotePeer)
-
-	// Update active nodes gauge and gater state
-	h.gater.mu.Lock()
-	now := time.Now().UnixMilli()
-	h.gater.lastUpdated[remotePeer] = now
-	if !h.gater.authenticated[remotePeer] {
-		samHubActiveNodes.Inc()
-	}
-	h.gater.authenticated[remotePeer] = true
-	h.gater.mu.Unlock()
-
-	// Notify other hubs of this peer
-	h.publishSyncMessage(context.Background(), &api.HubSyncMessage{
-		Action:    api.HubSyncMessage_ADD,
-		PeerId:    remotePeer.String(),
-		Timestamp: now,
-	})
-
-	// Publish JOIN event
-	event := &api.MeshEvent{
-		Type:      api.MeshEvent_JOIN,
-		PeerId:    remotePeer.String(),
-		Timestamp: time.Now().UnixMilli(),
-	}
-	if err := h.signEvent(event); err != nil {
-		logger.Errorw("Failed to sign mesh event", "peer_id", remotePeer, "error", err)
-	} else {
-		eventData, err := proto.Marshal(event)
-		if err != nil {
-			logger.Errorw("Failed to marshal mesh event", "peer_id", remotePeer, "error", err)
-		} else {
-			if err := h.EventTopic.Publish(context.Background(), eventData); err != nil {
-				logger.Errorw("Failed to publish mesh event", "peer_id", remotePeer, "error", err)
-			} else {
-				logger.Infow("Published JOIN event", "peer_id", remotePeer)
-				samHubMeshEventsTotal.WithLabelValues("JOIN").Inc()
-			}
-		}
-	}
-
-	// Send ACK back to client
-	writer := msgio.NewVarintWriter(s)
-	resp := &api.AuthResponse{Success: true}
-	respBytes, _ := proto.Marshal(resp)
-	if err := writer.WriteMsg(respBytes); err != nil {
-		logger.Errorf("[AuthN] Failed to write ACK to %s: %v", remotePeer, err)
-	}
 }
 
 func (h *Hub) verifyBiscuit(biscuitData []byte, remotePeer peer.ID) (*biscuit.Biscuit, error) {
@@ -729,7 +611,6 @@ func main() {
 			if err != nil {
 				logger.Fatal(err)
 			}
-			h.Host.SetStreamHandler(api.AuthProtocolID, h.handleAuthHandshake)
 
 			// Start key rotation if enabled
 			h.startRotation(ctx)
