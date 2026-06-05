@@ -140,7 +140,7 @@ type Hub struct {
 }
 
 // NewHub starts a host supporting both QUIC and TCP (with TLS 1.3)
-func NewHub(ctx context.Context, policy *api.PolicyConfig, allowLoopback bool, mux *http.ServeMux) (*Hub, error) {
+func NewHub(ctx context.Context, policy *api.PolicyConfig, allowLoopback bool, mux *http.ServeMux, serverTlsConfig *tls.Config) (*Hub, error) {
 
 	// Connection Manager for DoS protection
 	cm, err := connmgr.NewConnManager(LowWaterMark, HighWaterMark, connmgr.WithGracePeriod(ConnGracePeriod))
@@ -169,7 +169,11 @@ func NewHub(ctx context.Context, policy *api.PolicyConfig, allowLoopback bool, m
 		}),
 	}
 	if mux != nil {
-		opts = append(opts, libp2p.Transport(websocket.New, websocket.WithHTTPHandler(mux)))
+		if serverTlsConfig != nil {
+			opts = append(opts, libp2p.Transport(websocket.New, websocket.WithHTTPHandler(mux), websocket.WithTLSConfig(serverTlsConfig)))
+		} else {
+			opts = append(opts, libp2p.Transport(websocket.New, websocket.WithHTTPHandler(mux)))
+		}
 	}
 
 	h, err := libp2p.New(opts...)
@@ -628,7 +632,19 @@ func main() {
 			if strings.Contains(host, ":") {
 				ipVersion = "ip6"
 			}
-			wsAddr := fmt.Sprintf("/%s/%s/tcp/%s/ws", ipVersion, host, port)
+			var serverTlsConfig *tls.Config
+			wsScheme := "ws"
+			if tlsCertFile != "" && tlsKeyFile != "" {
+				cert, err := tls.LoadX509KeyPair(tlsCertFile, tlsKeyFile)
+				if err != nil {
+					logger.Fatalf("Failed to load TLS cert: %v", err)
+				}
+				serverTlsConfig = &tls.Config{
+					Certificates: []tls.Certificate{cert},
+				}
+				wsScheme = "wss"
+			}
+			wsAddr := fmt.Sprintf("/%s/%s/tcp/%s/%s", ipVersion, host, port, wsScheme)
 			listenAddrs = append(listenAddrs, wsAddr)
 
 			var hRef atomic.Pointer[Hub]
@@ -675,7 +691,7 @@ func main() {
 				}
 			})
 
-			h, err := NewHub(ctx, policyConfig, allowLoopbackFlag, mux)
+			h, err := NewHub(ctx, policyConfig, allowLoopbackFlag, mux, serverTlsConfig)
 			if err != nil {
 				logger.Fatal(err)
 			}
@@ -683,12 +699,6 @@ func main() {
 
 			// Start key rotation if enabled
 			h.startRotation(ctx)
-
-			// We don't start a separate HTTP server unless TLS is specifically required for admin separately,
-			// but WithHTTPHandler already shares the port on the websocket listener.
-			if tlsCertFile != "" && tlsKeyFile != "" {
-				logger.Warn("Separate TLS server not supported via CLI when using WithHTTPHandler. Ignoring tlsCertFile.")
-			}
 
 			logger.Infof("SAM Hub Online (QUIC + TCP + WS on %s)", bindAddress)
 			isHubReady.Store(true)
