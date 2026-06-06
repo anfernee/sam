@@ -230,7 +230,7 @@ func TestHandleInfoHTTP(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer h.Close()
+	defer h.Close() //nolint:errcheck
 
 	hub := &Hub{
 		KeyRing:          kr,

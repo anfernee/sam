@@ -274,7 +274,6 @@ func NewSamNode(ctx context.Context, privKey crypto.PrivKey, hubPubKey ed25519.P
 						if err := node.ConnectAndAuthWithHub(ctx, addr); err != nil {
 							logger.Warnf("[AuthN] Fallback auth failed with %s: %v", addr, err)
 						} else {
-							authenticated = true
 							logger.Infof("[AuthN] Fallback connection successful!")
 							break
 						}
