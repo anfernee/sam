@@ -86,7 +86,10 @@ func (m *MCPService) Init(ctx context.Context) error {
 		if !strings.Contains(err.Error(), "connection refused") {
 			break
 		}
-		time.Sleep(delay)
+		select {
+		case <-ctx.Done():
+		case <-time.After(delay):
+		}
 		delay *= 2
 		if delay > 10*time.Second {
 			delay = 10 * time.Second
