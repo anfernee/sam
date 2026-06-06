@@ -105,7 +105,9 @@ func (m *MCPService) Init(ctx context.Context) error {
 	}
 	m.session = s
 
-	res, err := s.ListTools(ctx, nil)
+	listCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	res, err := s.ListTools(listCtx, nil)
 	if err != nil {
 		logger.Warnf("[MCPService] %s: tools/list failed: %v", m.info.Name, err)
 		success = true
