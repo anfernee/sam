@@ -251,6 +251,39 @@ func NewSamNode(ctx context.Context, privKey crypto.PrivKey, hubPubKey ed25519.P
 		if fatalAuthErr != nil {
 			return nil, fmt.Errorf("fatal auth failure: %w", fatalAuthErr)
 		}
+
+		// Self-healing fallback: try to fetch updated addresses via HTTP if hub_url is known
+		hubURL, err := node.Store.LoadHubURL()
+		if err == nil && hubURL != "" {
+			logger.Infof("[AuthN] All P2P dials failed. Attempting to fetch updated hub addresses via HTTP from %s...", hubURL)
+			info, err := node.DiscoverHubInfo(ctx, hubURL)
+			if err == nil && len(info.HubAddresses) > 0 {
+				logger.Infof("[AuthN] Discovered updated hub addresses: %v", info.HubAddresses)
+				var newHubAddrs []multiaddr.Multiaddr
+				for _, addrStr := range info.HubAddresses {
+					ma, err := multiaddr.NewMultiaddr(addrStr)
+					if err == nil {
+						newHubAddrs = append(newHubAddrs, ma)
+					}
+				}
+				if len(newHubAddrs) > 0 {
+					if pubKeyBytes, _, err := node.Store.LoadHubConfig(); err == nil {
+						_ = node.Store.SaveHubConfig(pubKeyBytes, info.HubAddresses)
+					}
+					for _, addr := range newHubAddrs {
+						if err := node.ConnectAndAuthWithHub(ctx, addr); err != nil {
+							logger.Warnf("[AuthN] Fallback auth failed with %s: %v", addr, err)
+						} else {
+							authenticated = true
+							logger.Infof("[AuthN] Fallback connection successful!")
+							break
+						}
+					}
+				}
+			} else {
+				logger.Warnf("[AuthN] Failed to fetch updated addresses via HTTP: %v", err)
+			}
+		}
 	}
 
 	// Initialize Gossipsub for Hub Events

@@ -155,6 +155,23 @@ func (s *Store) LoadHubConfig() ([]byte, []string, error) {
 	return pubKey, addrs, err
 }
 
+func (s *Store) SaveHubURL(url string) error {
+	return s.db.Update(func(tx *bbolt.Tx) error {
+		b := tx.Bucket([]byte(bucketIdentity))
+		return b.Put([]byte("hub_url"), []byte(url))
+	})
+}
+
+func (s *Store) LoadHubURL() (string, error) {
+	var val []byte
+	err := s.db.View(func(tx *bbolt.Tx) error {
+		b := tx.Bucket([]byte(bucketIdentity))
+		val = b.Get([]byte("hub_url"))
+		return nil
+	})
+	return string(val), err
+}
+
 func (s *Store) Close() error {
 	return s.db.Close()
 }
