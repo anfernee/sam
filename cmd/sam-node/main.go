@@ -388,6 +388,9 @@ func main() {
 			if err != nil {
 				logger.Fatalf("Enrollment failed: %v", err)
 			}
+			if err := store.SaveHubURL(targetHub); err != nil {
+				logger.Warnf("Failed to save hub URL: %v", err)
+			}
 
 			fmt.Println("Successfully joined the Sovereign Agent Mesh!")
 		},

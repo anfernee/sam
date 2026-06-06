@@ -91,5 +91,6 @@ message HubInfoResponse {
   string oidc_issuer = 1;
   string client_id = 2;
   string audience = 3;
+  repeated string hub_addresses = 4;
 }
 

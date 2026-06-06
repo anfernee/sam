@@ -140,9 +140,10 @@ func handleInfoHTTP(h *Hub) http.HandlerFunc {
 		}
 
 		resp := &api.HubInfoResponse{
-			OidcIssuer: issuer,
-			ClientId:   aud,
-			Audience:   aud,
+			OidcIssuer:   issuer,
+			ClientId:     aud,
+			Audience:     aud,
+			HubAddresses: getMyHubAddrs(h),
 		}
 
 		respData, err := proto.Marshal(resp)

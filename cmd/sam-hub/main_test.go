@@ -26,6 +26,7 @@ import (
 	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/sam/api"
+	"github.com/libp2p/go-libp2p"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"google.golang.org/protobuf/proto"
@@ -221,9 +222,20 @@ func TestHandleInfoHTTP(t *testing.T) {
 
 	oidcIssuer = "http://mock-issuer"
 
+	priv, _, err := crypto.GenerateKeyPair(crypto.Ed25519, -1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, err := libp2p.New(libp2p.Identity(priv), libp2p.ListenAddrStrings("/ip4/127.0.0.1/tcp/0"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer h.Close() //nolint:errcheck
+
 	hub := &Hub{
 		KeyRing:          kr,
 		AllowedAudiences: []string{"test-audience-1", "test-audience-2"},
+		Host:             h,
 	}
 
 	handler := handleInfoHTTP(hub)

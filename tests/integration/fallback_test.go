@@ -17,6 +17,7 @@ package integration_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"crypto/ed25519"
 	"fmt"
 	"os"
@@ -38,6 +39,7 @@ import (
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/network"
+	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-msgio"
 	"github.com/multiformats/go-multiaddr"
 	"google.golang.org/protobuf/proto"
@@ -345,4 +347,165 @@ func (s *safeBuffer) String() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.buf.String()
+}
+
+func TestSelfHealingHTTPFallback(t *testing.T) {
+	nodeBin := buildBinary(t, "./cmd/sam-node")
+
+	var mu sync.Mutex
+	var currentP2PAddr string
+
+	createNewHost := func() host.Host {
+		newH, err := libp2p.New(libp2p.ListenAddrStrings("/ip4/127.0.0.1/tcp/0"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		newH.SetStreamHandler(api.AuthProtocolID, func(s network.Stream) {
+			defer func() { _ = s.Close() }()
+			reader := msgio.NewVarintReaderSize(s, 1024*64)
+			msg, err := reader.ReadMsg()
+			if err != nil {
+				return
+			}
+			defer reader.ReleaseMsg(msg)
+
+			writer := msgio.NewVarintWriter(s)
+			resp := &api.AuthResponse{Success: true}
+			respBytes, _ := proto.Marshal(resp)
+			_ = writer.WriteMsg(respBytes)
+		})
+		return newH
+	}
+
+	h := createNewHost()
+	defer func() { _ = h.Close() }()
+
+	mu.Lock()
+	currentP2PAddr = h.Addrs()[0].String() + "/p2p/" + h.ID().String()
+	mu.Unlock()
+
+	mux := http.NewServeMux()
+
+	// Mock OIDC server for device flow
+	mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"issuer":                        "http://" + r.Host,
+			"token_endpoint":                "http://" + r.Host + "/token",
+			"device_authorization_endpoint": "http://" + r.Host + "/device/code",
+		})
+	})
+	mux.HandleFunc("/device/code", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"device_code":               "dev_code_123",
+			"user_code":                 "ABCD-1234",
+			"verification_uri":          "http://example.com/verify",
+			"verification_uri_complete": "http://example.com/verify?code=ABCD-1234",
+			"expires_in":                60,
+			"interval":                  1,
+		})
+	})
+	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"access_token": "test-jwt-token",
+			"id_token":     "test-jwt-token",
+		})
+	})
+
+	mux.HandleFunc("/register", func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		addr := currentP2PAddr
+		mu.Unlock()
+		pub, _, _ := ed25519.GenerateKey(nil)
+		resp := &api.EnrollResponse{
+			BiscuitToken: []byte("mock-biscuit-token"),
+			HubPublicKey: pub,
+			HubAddresses: []string{addr},
+		}
+		data, _ := proto.Marshal(resp)
+		w.Header().Set("Content-Type", "application/x-protobuf")
+		_, _ = w.Write(data)
+	})
+	mux.HandleFunc("/info", func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		addr := currentP2PAddr
+		mu.Unlock()
+		resp := &api.HubInfoResponse{
+			OidcIssuer:   "http://" + r.Host,
+			ClientId:     "sam-mesh-audience",
+			Audience:     "sam-mesh-audience",
+			HubAddresses: []string{addr},
+		}
+		data, _ := proto.Marshal(resp)
+		w.Header().Set("Content-Type", "application/x-protobuf")
+		_, _ = w.Write(data)
+	})
+
+	httpServer := httptest.NewServer(mux)
+	defer httpServer.Close()
+
+	tmpHome := t.TempDir()
+	env := append(os.Environ(),
+		"HOME="+tmpHome,
+		"XDG_CONFIG_HOME="+filepath.Join(tmpHome, ".config"),
+	)
+
+	// Step 1: Enroll via Join (using mock OIDC)
+	joinStdout, joinStderr, err := runCommand(
+		t,
+		repoRoot(t),
+		5*time.Second,
+		env,
+		"",
+		nodeBin,
+		"join",
+		httpServer.URL,
+	)
+	if err != nil {
+		t.Fatalf("Join failed: %v\nstdout:\n%s\nstderr:\n%s", err, joinStdout, joinStderr)
+	}
+
+	out := joinStdout + joinStderr
+	if !strings.Contains(out, "Successfully joined the Sovereign Agent Mesh!") {
+		t.Fatalf("Join did not succeed:\n%s", out)
+	}
+
+	// Step 2: Simulate Hub changing its P2P port (HTTP URL stays the same)
+	_ = h.Close()
+	h = createNewHost()
+	defer func() { _ = h.Close() }()
+
+	mu.Lock()
+	currentP2PAddr = h.Addrs()[0].String() + "/p2p/" + h.ID().String()
+	mu.Unlock()
+
+	// Step 3: Start sam-node run
+	runCmd := exec.Command(nodeBin, "run", "--listen", "/ip4/127.0.0.1/tcp/0")
+	runCmd.Env = env
+	var stdout safeBuffer
+	runCmd.Stdout = &stdout
+	runCmd.Stderr = &stdout
+
+	if err := runCmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = runCmd.Process.Kill() }()
+
+	// Wait for successful fallback
+	success := false
+	for i := 0; i < 50; i++ {
+		out = stdout.String()
+		if strings.Contains(out, "Attempting to fetch updated hub addresses via HTTP") && 
+		   strings.Contains(out, "Fallback connection successful!") {
+			success = true
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	if !success {
+		t.Fatalf("Failed to detect self-healing HTTP fallback in output.\nOutput:\n%s", out)
+	}
 }
