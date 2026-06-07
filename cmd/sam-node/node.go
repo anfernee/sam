@@ -192,11 +192,26 @@ func NewSamNode(ctx context.Context, privKey crypto.PrivKey, hubPubKey ed25519.P
 		}),
 	}
 
+	authSuccess := make(chan struct{})
+
 	// If we have a Hub, configure it as our static fallback relay for NAT hole-punching
 	if len(staticRelays) > 0 {
-		opts = append(opts, libp2p.EnableAutoRelayWithStaticRelays(
-			staticRelays,
-			autorelay.WithBootDelay(2*time.Second),
+		opts = append(opts, libp2p.EnableAutoRelayWithPeerSource(
+			func(ctx context.Context, numPeers int) <-chan peer.AddrInfo {
+				c := make(chan peer.AddrInfo, len(staticRelays))
+				go func() {
+					defer close(c)
+					select {
+					case <-ctx.Done():
+					case <-authSuccess:
+						for _, r := range staticRelays {
+							c <- r
+						}
+					}
+				}()
+				return c
+			},
+			autorelay.WithBootDelay(0),
 			autorelay.WithBackoff(3*time.Second),
 		))
 	}
@@ -285,6 +300,10 @@ func NewSamNode(ctx context.Context, privKey crypto.PrivKey, hubPubKey ed25519.P
 				logger.Warnf("[AuthN] Failed to fetch updated addresses via HTTP: %v", err)
 			}
 		}
+	}
+
+	if authenticated {
+		close(authSuccess)
 	}
 
 	// Initialize Gossipsub for Hub Events
