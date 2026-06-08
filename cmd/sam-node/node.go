@@ -908,7 +908,7 @@ func (n *SamNode) IsServiceRegistered(serviceName string) bool {
 // reachable mesh can't wedge a discovery call indefinitely.
 const (
 	dhtLookupTimeout       = 5 * time.Second
-	discoveryFanoutTimeout = 5 * time.Second
+	discoveryFanoutTimeout = 15 * time.Second
 )
 
 // findProvidersByCID is the shared DHT-lookup primitive; bounds the
