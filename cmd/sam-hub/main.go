@@ -124,6 +124,11 @@ func (a *relayACL) AllowReserve(p peer.ID, addr multiaddr.Multiaddr) bool {
 
 func (a *relayACL) AllowConnect(src peer.ID, srcAddr multiaddr.Multiaddr, dest peer.ID) bool {
 	_, ok := a.hub.authenticatedPeers.Load(src)
+	if !ok {
+		logger.Errorf("[Relay] Rejecting connect from %s to %s: not authenticated", src, dest)
+	} else {
+		logger.Infof("[Relay] Allowing connect from %s to %s", src, dest)
+	}
 	return ok
 }
 
@@ -158,7 +163,6 @@ func NewHub(ctx context.Context, policy *api.PolicyConfig, allowLoopback bool, m
 		// FIPS compliant Security
 		libp2p.Security(libp2ptls.ID, libp2ptls.New),
 		libp2p.ConnectionManager(cm),
-		libp2p.EnableRelayService(),
 		libp2p.EnableAutoNATv2(),
 		libp2p.EnableNATService(),
 		libp2p.AddrsFactory(func(addrs []multiaddr.Multiaddr) []multiaddr.Multiaddr {
