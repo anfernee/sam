@@ -304,8 +304,6 @@ func NewSamNode(ctx context.Context, privKey crypto.PrivKey, hubPubKey ed25519.P
 		}
 	}
 
-	
-
 	// Initialize Gossipsub for Hub Events
 	ps, err := pubsub.NewGossipSub(ctx, h)
 	if err != nil {
@@ -317,7 +315,7 @@ func NewSamNode(ctx context.Context, privKey crypto.PrivKey, hubPubKey ed25519.P
 	sub, err := h.EventBus().Subscribe(new(event.EvtLocalAddressesUpdated))
 	if err == nil {
 		go func() {
-			defer sub.Close()
+			defer sub.Close() //nolint:errcheck
 			for {
 				select {
 				case <-ctx.Done():
