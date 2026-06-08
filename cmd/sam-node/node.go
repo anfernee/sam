@@ -47,6 +47,7 @@ import (
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/libp2p/go-libp2p/core/peerstore"
 	"github.com/libp2p/go-libp2p/p2p/discovery/routing"
 	"github.com/libp2p/go-libp2p/p2p/discovery/util"
 	"github.com/libp2p/go-libp2p/p2p/host/autorelay"
@@ -159,6 +160,11 @@ func NewSamNode(ctx context.Context, privKey crypto.PrivKey, hubPubKey ed25519.P
 	for _, addr := range hubAddrs {
 		if addrInfo, err := peer.AddrInfoFromP2pAddr(addr); err == nil && addrInfo.ID != "" {
 			staticRelays = append(staticRelays, *addrInfo)
+			if node.HubPeerID == "" {
+				node.HubPeerID = addrInfo.ID
+			}
+			// Permanently add the static relay address to the peerstore so we can build relay paths later
+			// The node doesn't exist yet! We need to add it after New() returns.
 		} else {
 			logger.Warnf("Failed to parse static relay addr %s: %v", addr, err)
 		}
@@ -181,6 +187,8 @@ func NewSamNode(ctx context.Context, privKey crypto.PrivKey, hubPubKey ed25519.P
 		libp2p.ListenAddrStrings(listenAddrs...),
 		libp2p.EnableNATService(),
 		libp2p.EnableAutoNATv2(),
+		libp2p.ForceReachabilityPrivate(),
+		libp2p.EnableRelay(),
 		libp2p.ConnectionManager(cm),
 		libp2p.AddrsFactory(func(addrs []multiaddr.Multiaddr) []multiaddr.Multiaddr {
 			if allowLoopback {
@@ -200,12 +208,15 @@ func NewSamNode(ctx context.Context, privKey crypto.PrivKey, hubPubKey ed25519.P
 	if len(staticRelays) > 0 {
 		opts = append(opts, libp2p.EnableAutoRelayWithPeerSource(
 			func(ctx context.Context, numPeers int) <-chan peer.AddrInfo {
+				logger.Infof("[Relay] AutoRelay called PeerSource for %d peers", numPeers)
 				c := make(chan peer.AddrInfo, len(staticRelays))
 				go func() {
 					defer close(c)
 					select {
 					case <-ctx.Done():
+						logger.Infof("[Relay] PeerSource context done")
 					case <-node.authSuccess:
+						logger.Infof("[Relay] Yielding static relays to AutoRelay")
 						for _, r := range staticRelays {
 							c <- r
 						}
@@ -228,6 +239,11 @@ func NewSamNode(ctx context.Context, privKey crypto.PrivKey, hubPubKey ed25519.P
 		return nil, err
 	}
 	node.Host = h
+
+	// Permanently add the static relay address to the peerstore so we can build relay paths later
+	for _, pi := range staticRelays {
+		h.Peerstore().AddAddrs(pi.ID, pi.Addrs, peerstore.PermanentAddrTTL)
+	}
 
 	if enableRelay {
 		logger.Infof("[Relay] Enabling Relay Service with ACL")
@@ -739,6 +755,26 @@ func (n *SamNode) startDiscovery(ctx context.Context, meshID string, interval ti
 
 				if n.Host.Network().Connectedness(p.ID) != network.Connected {
 					logger.Infof("[Discovery] Found peer not connected via DHT: %s", p.ID)
+					
+					// Add relay addresses to the peer if HubPeerID is known
+					if n.HubPeerID != "" && p.ID != n.Host.ID() && p.ID != n.HubPeerID {
+						baseAddrs := n.Host.Peerstore().Addrs(n.HubPeerID)
+						if circuitMaddr, err := multiaddr.NewMultiaddr(fmt.Sprintf("/p2p-circuit/p2p/%s", p.ID)); err == nil {
+							for _, ba := range baseAddrs {
+								p2pStr := fmt.Sprintf("/p2p/%s", n.HubPeerID)
+								if !strings.Contains(ba.String(), p2pStr) {
+									if p2pMaddr, err := multiaddr.NewMultiaddr(p2pStr); err == nil {
+										ba = ba.Encapsulate(p2pMaddr)
+									}
+								}
+								fullAddr := ba.Encapsulate(circuitMaddr)
+								p.Addrs = append(p.Addrs, fullAddr)
+								n.Host.Peerstore().AddAddr(p.ID, fullAddr, time.Minute*10)
+								logger.Infof("[Discovery] Added relay address for DHT peer %s: %s", p.ID, fullAddr)
+							}
+						}
+					}
+
 					go func(pi peer.AddrInfo) {
 						if err := n.Host.Connect(ctx, pi); err != nil {
 							logger.Errorf("[Discovery] Failed to connect to %s: %v", pi.ID, err)
@@ -906,6 +942,30 @@ func (n *SamNode) findProvidersByCID(ctx context.Context, c cid.Cid) ([]peer.Add
 	}
 	providers := make([]peer.AddrInfo, 0, len(providersMap))
 	for _, p := range providersMap {
+		hubAddrsCount := 0
+		if n.HubPeerID != "" {
+			hubAddrsCount = len(n.Host.Peerstore().Addrs(n.HubPeerID))
+		}
+		logger.Infof("[Discovery] Evaluating relay for %s: HubPeerID=%s, HubAddrsCount=%d", p.ID, n.HubPeerID, hubAddrsCount)
+
+		if n.HubPeerID != "" && p.ID != n.Host.ID() && p.ID != n.HubPeerID {
+			baseAddrs := n.Host.Peerstore().Addrs(n.HubPeerID)
+
+			if circuitMaddr, err := multiaddr.NewMultiaddr(fmt.Sprintf("/p2p-circuit/p2p/%s", p.ID)); err == nil {
+				for _, ba := range baseAddrs {
+					p2pStr := fmt.Sprintf("/p2p/%s", n.HubPeerID)
+					if !strings.Contains(ba.String(), p2pStr) {
+						if p2pMaddr, err := multiaddr.NewMultiaddr(p2pStr); err == nil {
+							ba = ba.Encapsulate(p2pMaddr)
+						}
+					}
+					fullAddr := ba.Encapsulate(circuitMaddr)
+					p.Addrs = append(p.Addrs, fullAddr)
+					n.Host.Peerstore().AddAddr(p.ID, fullAddr, time.Minute*10)
+					logger.Infof("[Discovery] Added relay address for %s: %s", p.ID, fullAddr)
+				}
+			}
+		}
 		providers = append(providers, p)
 	}
 	return providers, nil
@@ -1054,6 +1114,7 @@ func (n *SamNode) discoverServicesByType(ctx context.Context, serviceType api.Se
 	if err != nil {
 		return nil, err
 	}
+	logger.Infof("[Discovery] FindProvidersByType returned %d peers", len(peers))
 
 	fanoutCtx, cancel := context.WithTimeout(ctx, discoveryFanoutTimeout)
 	defer cancel()

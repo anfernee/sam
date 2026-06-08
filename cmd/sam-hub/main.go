@@ -114,6 +114,11 @@ type relayACL struct {
 
 func (a *relayACL) AllowReserve(p peer.ID, addr multiaddr.Multiaddr) bool {
 	_, ok := a.hub.authenticatedPeers.Load(p)
+	if !ok {
+		logger.Errorf("[Relay] Rejecting reservation for %s: not authenticated", p)
+	} else {
+		logger.Infof("[Relay] Allowing reservation for %s", p)
+	}
 	return ok
 }
 
