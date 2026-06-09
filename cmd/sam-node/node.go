@@ -189,6 +189,7 @@ func NewSamNode(ctx context.Context, privKey crypto.PrivKey, hubPubKey ed25519.P
 		libp2p.EnableAutoNATv2(),
 		libp2p.ForceReachabilityPrivate(),
 		libp2p.EnableRelay(),
+		libp2p.EnableHolePunching(),
 		libp2p.ConnectionManager(cm),
 		libp2p.AddrsFactory(func(addrs []multiaddr.Multiaddr) []multiaddr.Multiaddr {
 			if allowLoopback {
